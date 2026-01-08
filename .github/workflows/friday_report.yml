@@ -1,18 +1,21 @@
-name: TQQQ Vol Target Weekly Report
+name: Friday TQQQ Vol Report
 
 on:
   workflow_dispatch: {}
   schedule:
-    # Friday 1:05pm America/Los_Angeles = 21:05 UTC (during standard time)
-    # If DST shifts, adjust later if you want it exact.
+    # Friday 13:05 America/Los_Angeles = Friday 21:05 UTC (most of the year)
+    # If DST shifts, adjust this by +/- 1 hour as needed.
     - cron: "5 21 * * 5"
+
+permissions:
+  contents: write
 
 jobs:
   run-report:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -25,123 +28,72 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run report
+      - name: Run weekly report
         run: |
           set -e
           python fetch_tqqq.py
           python weekly_report.py
 
-      # OPTIONAL: upload artifacts so you can download the HTML + logs from the run page
-      - name: Upload report artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: tqqq-vol-target-output
-          path: |
-            output/weekly_report.html
-            logs/friday_run.log
-            logs/history.csv
-            data/TQQQ.csv
-
-      - name: Commit outputs (history/log/html) back to repo
+      # (Optional) Commit generated files back to repo (history/logs/output).
+      # Keeps the HTML + history in the repo so you can view it anytime.
+      - name: Commit report artifacts (if changed)
         run: |
           set -e
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-          # Make sure these folders exist
-          mkdir -p output logs data
+          # Only add the generated outputs you actually want tracked:
+          git add -A output logs data || true
 
-          git add output/weekly_report.html logs/friday_run.log logs/history.csv data/TQQQ.csv || true
-
-          # Commit only if there are changes
           if git diff --cached --quiet; then
-            echo "No changes to commit"
+            echo "No changes to commit."
             exit 0
           fi
 
           git commit -m "Weekly TQQQ vol report ($(date -u +%Y-%m-%d))"
           git push
 
-      - name: Send email (debug + sanitize)
+      # ✅ PUSHOVER: Always send, even if earlier steps fail
+      - name: Send Pushover notification (ALWAYS)
+        if: always()
         env:
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
         run: |
-          python - << 'PY'
-          import os, re, smtplib
-          from email.message import EmailMessage
-          from pathlib import Path
+          set -e
 
-          def clean_generic(s: str) -> str:
-              if s is None:
-                  return ""
-              return s.replace("\u00a0", " ").strip()
+          # Status-based title
+          if [ "${{ job.status }}" = "success" ]; then
+            STATUS_EMOJI="✅"
+            PRIORITY="0"
+          else
+            STATUS_EMOJI="❌"
+            PRIORITY="1"
+          fi
 
-          def clean_password(s: str) -> str:
-              s = clean_generic(s)
-              return re.sub(r"\s+", "", s)
+          # Try to read a nice subject created by weekly_report.py
+          SUBJECT_FILE="output/subject.txt"
+          if [ -f "$SUBJECT_FILE" ]; then
+            SUBJECT="$(cat "$SUBJECT_FILE")"
+          else
+            SUBJECT="TQQQ Vol Target report ran (no subject.txt found)"
+          fi
 
-          def find_non_ascii(s: str):
-              bad = []
-              for i, ch in enumerate(s):
-                  if ord(ch) > 127:
-                      bad.append((i, f"U+{ord(ch):04X}"))
-              return bad
+          # Link back to the Actions run
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-          raw = {
-              "SMTP_SERVER": os.environ.get("SMTP_SERVER", ""),
-              "SMTP_PORT": os.environ.get("SMTP_PORT", "465"),
-              "SMTP_USERNAME": os.environ.get("SMTP_USERNAME", ""),
-              "SMTP_PASSWORD": os.environ.get("SMTP_PASSWORD", ""),
-              "EMAIL_TO": os.environ.get("EMAIL_TO", ""),
-              "EMAIL_FROM": os.environ.get("EMAIL_FROM", ""),
-          }
+          TITLE="${STATUS_EMOJI} TQQQ Vol Target"
+          MESSAGE="${SUBJECT}\nRun: ${RUN_URL}"
 
-          smtp_server = clean_generic(raw["SMTP_SERVER"])
-          smtp_port = int(clean_generic(raw["SMTP_PORT"]) or "465")
-          smtp_user = clean_generic(raw["SMTP_USERNAME"])
-          smtp_pass = clean_password(raw["SMTP_PASSWORD"])
-          email_to = clean_generic(raw["EMAIL_TO"])
-          email_from = clean_generic(raw["EMAIL_FROM"]) or smtp_user
+          # Send to Pushover
+          curl -sS https://api.pushover.net/1/messages.json \
+            --form-string "token=${PUSHOVER_API_TOKEN}" \
+            --form-string "user=${PUSHOVER_USER_KEY}" \
+            --form-string "title=${TITLE}" \
+            --form-string "message=${MESSAGE}" \
+            --form-string "priority=${PRIORITY}" \
+            --form-string "url=${RUN_URL}" \
+            --form-string "url_title=Open GitHub run" \
+            >/dev/null
 
-          cleaned = {
-              "SMTP_SERVER": smtp_server,
-              "SMTP_PORT": str(smtp_port),
-              "SMTP_USERNAME": smtp_user,
-              "SMTP_PASSWORD": smtp_pass,
-              "EMAIL_TO": email_to,
-              "EMAIL_FROM": email_from,
-          }
-
-          missing = [k for k,v in cleaned.items() if k != "SMTP_PORT" and not v]
-          if missing:
-              raise SystemExit("❌ Missing required secrets: " + ", ".join(missing))
-
-          for k, v in cleaned.items():
-              bad = find_non_ascii(v)
-              if bad:
-                  raise SystemExit(f"❌ '{k}' contains non-ASCII characters at: {bad}. Recreate that secret in GitHub.")
-
-          html_path = Path("output/weekly_report.html")
-          if not html_path.exists():
-              raise SystemExit("❌ output/weekly_report.html not found")
-
-          html = html_path.read_text(encoding="utf-8")
-
-          msg = EmailMessage()
-          msg["Subject"] = "TQQQ Vol Target — Weekly Report"
-          msg["From"] = email_from
-          msg["To"] = email_to
-          msg.set_content("Weekly report attached + inline.")
-          msg.add_alternative(html, subtype="html")
-
-          with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30) as s:
-              s.login(smtp_user, smtp_pass)
-              s.send_message(msg)
-
-          print("✅ Email sent to", email_to)
-          PY
+          echo "Pushover sent."
