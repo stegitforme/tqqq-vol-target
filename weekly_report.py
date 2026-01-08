@@ -7,6 +7,48 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
+from datetime import datetime, timedelta
+
+HISTORY_CSV = BASE / "logs" / "history.csv"
+HISTORY_DAYS = 365  # keep last 365 days of run history
+
+
+def append_history_row(run_date, close, vol20, target_vol, alloc_tqqq):
+    """
+    Appends one row per run to logs/history.csv and trims to last HISTORY_DAYS days.
+    """
+    BASE.joinpath("logs").mkdir(parents=True, exist_ok=True)
+
+    row = {
+        "RunDate": pd.to_datetime(run_date).date().isoformat(),
+        "Close": float(close),
+        "RealizedVol20d": float(vol20),
+        "TargetVol": float(target_vol),
+        "AllocTQQQ": float(alloc_tqqq),
+        "AllocCash": float(1.0 - alloc_tqqq),
+    }
+
+    if HISTORY_CSV.exists():
+        hist = pd.read_csv(HISTORY_CSV, parse_dates=["RunDate"])
+    else:
+        hist = pd.DataFrame(columns=row.keys())
+
+    hist = pd.concat([hist, pd.DataFrame([row])], ignore_index=True)
+
+    # Drop duplicates if re-run same day
+    hist["RunDate"] = pd.to_datetime(hist["RunDate"])
+    hist = hist.sort_values("RunDate")
+    hist = hist.drop_duplicates(subset=["RunDate"], keep="last")
+
+    # Trim to last HISTORY_DAYS
+    cutoff = pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=HISTORY_DAYS)
+    hist = hist[hist["RunDate"] >= cutoff].copy()
+
+    # Write
+    hist["RunDate"] = hist["RunDate"].dt.date.astype(str)
+    hist.to_csv(HISTORY_CSV, index=False)
+
+    return hist
 
 # ============================================================
 # Base paths (repo root)
