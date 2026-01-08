@@ -11,6 +11,10 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 jobs:
   run-report:
     runs-on: ubuntu-latest
@@ -51,6 +55,7 @@ jobs:
           path: output
 
       - name: Deploy to GitHub Pages
+        id: deploy
         uses: actions/deploy-pages@v4
 
       # -----------------------------
@@ -64,12 +69,20 @@ jobs:
         run: |
           set -e
 
+          # Quick sanity check (does NOT print secrets)
+          if [ -z "$PUSHOVER_USER" ]; then echo "❌ Missing PUSHOVER_USER secret"; exit 1; fi
+          if [ -z "$PUSHOVER_TOKEN" ]; then echo "❌ Missing PUSHOVER_TOKEN secret"; exit 1; fi
+
           SUBJECT="$(cat output/subject.txt 2>/dev/null || echo 'TQQQ Vol Target Weekly Report')"
           MESSAGE="$(cat output/message.txt 2>/dev/null || echo 'Report generated.')"
 
-          REPORT_URL="https://stegitforme.github.io/tqqq-vol-target/weekly_report.html"
+          # Use the Pages URL returned by deploy-pages (survives username/repo changes)
+          PAGE_URL="${{ steps.deploy.outputs.page_url }}"
+          REPORT_URL="${PAGE_URL}weekly_report.html"
 
-          curl -s \
+          echo "Report URL: $REPORT_URL"
+
+          curl -sS \
             --form-string "token=$PUSHOVER_TOKEN" \
             --form-string "user=$PUSHOVER_USER" \
             --form-string "title=$SUBJECT" \
