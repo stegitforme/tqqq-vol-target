@@ -11,6 +11,10 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
 jobs:
   run-report:
     runs-on: ubuntu-latest
@@ -51,7 +55,32 @@ jobs:
           path: output
 
       - name: Deploy to GitHub Pages
+        id: deploy
         uses: actions/deploy-pages@v4
+
+      # -----------------------------
+      # Build link + message text
+      # -----------------------------
+      - name: Prepare notification text
+        run: |
+          set -e
+          REPORT_URL="https://stegitforme.github.io/tqqq-vol-target/weekly_report.html"
+
+          SUBJECT="$(cat output/subject.txt 2>/dev/null || echo 'TQQQ Vol Target Weekly Report')"
+          MESSAGE="$(cat output/message.txt 2>/dev/null || echo 'Report generated.')"
+
+          echo "REPORT_URL=$REPORT_URL" >> $GITHUB_ENV
+          echo "SUBJECT=$SUBJECT" >> $GITHUB_ENV
+
+          {
+            echo "$MESSAGE"
+            echo ""
+            echo "Open live report:"
+            echo "$REPORT_URL"
+            echo ""
+            echo "Run:"
+            echo "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > /tmp/notify_body.txt
 
       # -----------------------------
       # Push notification (Pushover)
@@ -59,21 +88,70 @@ jobs:
       - name: Send Pushover notification
         if: always()
         env:
-          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
         run: |
           set -e
 
-          SUBJECT="$(cat output/subject.txt 2>/dev/null || echo 'TQQQ Vol Target Weekly Report')"
-          MESSAGE="$(cat output/message.txt 2>/dev/null || echo 'Report generated.')"
-
-          REPORT_URL="https://stegitforme.github.io/tqqq-vol-target/weekly_report.html"
+          if [ -z "${PUSHOVER_USER_KEY:-}" ]; then
+            echo "❌ Missing PUSHOVER_USER_KEY secret"
+            exit 1
+          fi
+          if [ -z "${PUSHOVER_API_TOKEN:-}" ]; then
+            echo "❌ Missing PUSHOVER_API_TOKEN secret"
+            exit 1
+          fi
 
           curl -s \
             --form-string "token=$PUSHOVER_API_TOKEN" \
             --form-string "user=$PUSHOVER_USER_KEY" \
             --form-string "title=$SUBJECT" \
-            --form-string "message=$MESSAGE" \
+            --form-string "message=$(cat /tmp/notify_body.txt)" \
             --form-string "url=$REPORT_URL" \
             --form-string "url_title=Open live report (chart)" \
             https://api.pushover.net/1/messages.json
+
+      # -----------------------------
+      # Email (SMTP) — Gmail App Password works
+      # -----------------------------
+      - name: Send email (SMTP)
+        if: always()
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: |
+          python - << 'PY'
+          import os, smtplib
+          from email.message import EmailMessage
+
+          smtp_server = os.environ["SMTP_SERVER"]
+          smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+          smtp_user = os.environ["SMTP_USERNAME"]
+          smtp_pass = os.environ["SMTP_PASSWORD"]
+          email_from = os.environ["EMAIL_FROM"]
+          email_to = os.environ["EMAIL_TO"]
+
+          subject = os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report")
+          report_url = os.environ.get("REPORT_URL", "")
+          body = open("/tmp/notify_body.txt", "r", encoding="utf-8").read()
+
+          msg = EmailMessage()
+          msg["From"] = email_from
+          msg["To"] = email_to
+          msg["Subject"] = subject
+
+          # Plain-text body
+          msg.set_content(body, charset="utf-8")
+
+          with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as s:
+            s.ehlo()
+            s.starttls()
+            s.login(smtp_user, smtp_pass)
+            s.send_message(msg)
+
+          print(f"✅ Email sent to {email_to}")
+          PY
