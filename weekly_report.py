@@ -12,7 +12,7 @@ import pandas as pd
 # ----------------------------
 # Paths
 # ----------------------------
-BASE = pathlib.Path("/Users/sggmpb13/Library/Mobile Documents/com~apple~CloudDocs/Trading")
+BASE = pathlib.Path(__file__).resolve().parents[1]
 DATA_DIR = BASE / "data"
 OUT_DIR = BASE / "output"
 STATE_DIR = BASE / "state"
