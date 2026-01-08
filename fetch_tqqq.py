@@ -1,43 +1,65 @@
 #!/usr/bin/env python3
-from __future__ import annotations
+"""
+Fetch TQQQ daily price history and write to data/TQQQ.csv
+
+Works:
+- locally
+- on GitHub Actions
+- without requiring a virtualenv path
+"""
 
 from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
-BASE = Path(__file__).resolve().parents[1]
+
+# -------------------------------------------------
+# Paths (repo-root safe)
+# -------------------------------------------------
+BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
-OUT_CSV = DATA_DIR / "TQQQ.csv"
+PRICE_FILE = DATA_DIR / "TQQQ.csv"
+
 
 def main():
+    print("[fetch_tqqq] BASE =", BASE)
+
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+    print("[fetch_tqqq] Downloading TQQQ data...")
     df = yf.download(
         tickers="TQQQ",
         period="max",
         interval="1d",
         auto_adjust=False,
-        group_by="column",
         progress=False,
     )
 
     if df is None or df.empty:
-        raise RuntimeError("No data returned for TQQQ (network/API issue).")
+        raise RuntimeError("No data returned from yfinance")
 
-    # Handle MultiIndex columns if present (e.g., ('Close','TQQQ'))
+    # Handle MultiIndex columns safely
     if isinstance(df.columns, pd.MultiIndex):
-        close = df["Close"]["TQQQ"].rename("Close")
-        out = close.to_frame()
+        close = df["Close"]["TQQQ"]
     else:
-        out = df[["Close"]].copy()
+        close = df["Close"]
 
-    out = out.reset_index()
+    out = (
+        close
+        .dropna()
+        .rename("Close")
+        .to_frame()
+        .reset_index()
+    )
+
     out["Date"] = pd.to_datetime(out["Date"]).dt.date.astype(str)
-    out = out[["Date", "Close"]].dropna()
+    out = out[["Date", "Close"]]
 
-    out.to_csv(OUT_CSV, index=False)
-    print(f"Wrote {OUT_CSV} ({len(out)} rows)")
-    print(out.tail(3).to_string(index=False))
+    out.to_csv(PRICE_FILE, index=False)
+
+    print(f"[fetch_tqqq] Wrote {PRICE_FILE} ({len(out)} rows)")
+    print(out.tail(3))
+
 
 if __name__ == "__main__":
     main()
