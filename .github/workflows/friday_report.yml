@@ -1,3 +1,67 @@
+name: TQQQ Vol Target Weekly Report
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Friday 1:05pm America/Los_Angeles = 21:05 UTC (during standard time)
+    # If DST shifts, adjust later if you want it exact.
+    - cron: "5 21 * * 5"
+
+jobs:
+  run-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run report
+        run: |
+          set -e
+          python fetch_tqqq.py
+          python weekly_report.py
+
+      # OPTIONAL: upload artifacts so you can download the HTML + logs from the run page
+      - name: Upload report artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tqqq-vol-target-output
+          path: |
+            output/weekly_report.html
+            logs/friday_run.log
+            logs/history.csv
+            data/TQQQ.csv
+
+      - name: Commit outputs (history/log/html) back to repo
+        run: |
+          set -e
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          # Make sure these folders exist
+          mkdir -p output logs data
+
+          git add output/weekly_report.html logs/friday_run.log logs/history.csv data/TQQQ.csv || true
+
+          # Commit only if there are changes
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "Weekly TQQQ vol report ($(date -u +%Y-%m-%d))"
+          git push
+
       - name: Send email (debug + sanitize)
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
@@ -15,22 +79,19 @@
           def clean_generic(s: str) -> str:
               if s is None:
                   return ""
-              # Replace NBSP with normal space, strip ends
               return s.replace("\u00a0", " ").strip()
 
           def clean_password(s: str) -> str:
               s = clean_generic(s)
-              # App passwords are often pasted with spaces; remove ALL whitespace
               return re.sub(r"\s+", "", s)
 
           def find_non_ascii(s: str):
               bad = []
               for i, ch in enumerate(s):
                   if ord(ch) > 127:
-                      bad.append((i, ch, f"U+{ord(ch):04X}"))
+                      bad.append((i, f"U+{ord(ch):04X}"))
               return bad
 
-          # Read env
           raw = {
               "SMTP_SERVER": os.environ.get("SMTP_SERVER", ""),
               "SMTP_PORT": os.environ.get("SMTP_PORT", "465"),
@@ -40,7 +101,6 @@
               "EMAIL_FROM": os.environ.get("EMAIL_FROM", ""),
           }
 
-          # Sanitize
           smtp_server = clean_generic(raw["SMTP_SERVER"])
           smtp_port = int(clean_generic(raw["SMTP_PORT"]) or "465")
           smtp_user = clean_generic(raw["SMTP_USERNAME"])
@@ -57,30 +117,21 @@
               "EMAIL_FROM": email_from,
           }
 
-          # Validate presence
           missing = [k for k,v in cleaned.items() if k != "SMTP_PORT" and not v]
           if missing:
               raise SystemExit("❌ Missing required secrets: " + ", ".join(missing))
 
-          # Detect non-ascii BEFORE login and tell you exactly which secret is dirty
           for k, v in cleaned.items():
               bad = find_non_ascii(v)
               if bad:
-                  # Print only positions and codepoints; do not print content
-                  positions = [f"pos={i} {cp}" for (i, ch, cp) in bad]
-                  raise SystemExit(
-                      f"❌ '{k}' contains non-ASCII characters: {positions}. "
-                      f"Most common is NBSP (U+00A0). Recreate that secret in GitHub Actions."
-                  )
+                  raise SystemExit(f"❌ '{k}' contains non-ASCII characters at: {bad}. Recreate that secret in GitHub.")
 
-          # Load HTML
           html_path = Path("output/weekly_report.html")
           if not html_path.exists():
               raise SystemExit("❌ output/weekly_report.html not found")
 
           html = html_path.read_text(encoding="utf-8")
 
-          # Compose email
           msg = EmailMessage()
           msg["Subject"] = "TQQQ Vol Target — Weekly Report"
           msg["From"] = email_from
@@ -88,7 +139,6 @@
           msg.set_content("Weekly report attached + inline.")
           msg.add_alternative(html, subtype="html")
 
-          # Send
           with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30) as s:
               s.login(smtp_user, smtp_pass)
               s.send_message(msg)
