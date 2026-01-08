@@ -1,24 +1,25 @@
 name: Friday TQQQ Vol Report
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   schedule:
-    # Friday 13:05 America/Los_Angeles = Friday 21:05 UTC (most of the year)
-    # If DST shifts, adjust this by +/- 1 hour as needed.
-    - cron: "5 21 * * 5"
+    # Friday after market close (6:10pm ET ≈ 23:10 UTC)
+    - cron: "10 23 * * 5"
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   run-report:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -30,70 +31,49 @@ jobs:
 
       - name: Run weekly report
         run: |
-          set -e
           python fetch_tqqq.py
           python weekly_report.py
 
-      # (Optional) Commit generated files back to repo (history/logs/output).
-      # Keeps the HTML + history in the repo so you can view it anytime.
-      - name: Commit report artifacts (if changed)
+      - name: Commit updated data + report
         run: |
-          set -e
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-
-          # Only add the generated outputs you actually want tracked:
-          git add -A output logs data || true
-
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
-
-          git commit -m "Weekly TQQQ vol report ($(date -u +%Y-%m-%d))"
+          git add data/ logs/ output/
+          git commit -m "Weekly TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
           git push
 
-      # ✅ PUSHOVER: Always send, even if earlier steps fail
-      - name: Send Pushover notification (ALWAYS)
+      # -----------------------------
+      # Publish HTML to GitHub Pages
+      # -----------------------------
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: output
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
+
+      # -----------------------------
+      # Push notification (Pushover)
+      # -----------------------------
+      - name: Send Pushover notification
         if: always()
         env:
-          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
-          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
         run: |
           set -e
 
-          # Status-based title
-          if [ "${{ job.status }}" = "success" ]; then
-            STATUS_EMOJI="✅"
-            PRIORITY="0"
-          else
-            STATUS_EMOJI="❌"
-            PRIORITY="1"
-          fi
+          SUBJECT="$(cat output/subject.txt 2>/dev/null || echo 'TQQQ Vol Target Weekly Report')"
+          MESSAGE="$(cat output/message.txt 2>/dev/null || echo 'Report generated.')"
 
-          # Try to read a nice subject created by weekly_report.py
-          SUBJECT_FILE="output/subject.txt"
-          if [ -f "$SUBJECT_FILE" ]; then
-            SUBJECT="$(cat "$SUBJECT_FILE")"
-          else
-            SUBJECT="TQQQ Vol Target report ran (no subject.txt found)"
-          fi
+          REPORT_URL="https://stegitforme.github.io/tqqq-vol-target/weekly_report.html"
 
-          # Link back to the Actions run
-          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-
-          TITLE="${STATUS_EMOJI} TQQQ Vol Target"
-          MESSAGE="${SUBJECT}\nRun: ${RUN_URL}"
-
-          # Send to Pushover
-          curl -sS https://api.pushover.net/1/messages.json \
-            --form-string "token=${PUSHOVER_API_TOKEN}" \
-            --form-string "user=${PUSHOVER_USER_KEY}" \
-            --form-string "title=${TITLE}" \
-            --form-string "message=${MESSAGE}" \
-            --form-string "priority=${PRIORITY}" \
-            --form-string "url=${RUN_URL}" \
-            --form-string "url_title=Open GitHub run" \
-            >/dev/null
-
-          echo "Pushover sent."
+          curl -s \
+            --form-string "token=$PUSHOVER_TOKEN" \
+            --form-string "user=$PUSHOVER_USER" \
+            --form-string "title=$SUBJECT" \
+            --form-string "message=$MESSAGE" \
+            --form-string "url=$REPORT_URL" \
+            --form-string "url_title=Open live report (chart)" \
+            https://api.pushover.net/1/messages.json
