@@ -3,8 +3,8 @@ name: TQQQ Vol Target Weekly Report
 on:
   workflow_dispatch: {}
   schedule:
-    # Friday 22:10 UTC = Friday 2:10pm Los Angeles during standard time (PST)
-    # During daylight savings (PDT), it will run 1 hour later than this.
+    # Friday 22:10 UTC ≈ Friday 2:10pm Los Angeles (PST)
+    # During daylight savings, this will be ~1 hour later
     - cron: "10 22 * * 5"
 
 jobs:
@@ -25,9 +25,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Debug step so we can always see what files exist
+      - name: Debug - list repo files
+        run: |
+          pwd
+          ls -la
+
       - name: Run weekly report
         run: |
-          python scripts/weekly_report.py
+          python weekly_report.py
 
       - name: Upload weekly report artifact
         uses: actions/upload-artifact@v4
@@ -35,5 +41,5 @@ jobs:
           name: weekly-report
           path: |
             output/weekly_report.html
-            logs/
             data/TQQQ.csv
+            logs/
