@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
-BASE = Path("/Users/sggmpb13/Library/Mobile Documents/com~apple~CloudDocs/Trading")
+BASE = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE / "data"
 OUT_CSV = DATA_DIR / "TQQQ.csv"
 
