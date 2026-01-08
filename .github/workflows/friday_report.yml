@@ -1,18 +1,14 @@
-name: Weekly TQQQ vol report
+name: Friday TQQQ Vol Report
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   schedule:
-    # Fridays at 21:10 UTC (~1:10pm PT standard time).
-    # If you want a different time, tell me your timezone + target time and I’ll adjust.
-    - cron: "10 21 * * 5"
+    # Friday 1:05pm America/Los_Angeles ≈ 21:05 UTC during PST (winter)
+    # If DST shifts, you may adjust later.
+    - cron: "5 21 * * 5"
 
 permissions:
   contents: write
-
-concurrency:
-  group: weekly-tqqq-vol-report
-  cancel-in-progress: false
 
 jobs:
   run-report:
@@ -21,9 +17,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,25 +31,125 @@ jobs:
       - name: Run weekly report
         run: |
           set -e
-          python fetch_tqqq.py
           python weekly_report.py
 
-      - name: Commit & push outputs (data/logs/output)
+      # ------------------------------
+      # EMAIL (Gmail SMTP App Password)
+      # ------------------------------
+      - name: Send email (HTML report)
+        env:
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+        run: |
+          python - << 'PY'
+          import os, smtplib
+          from email.message import EmailMessage
+          from pathlib import Path
+
+          smtp_server = os.environ.get("SMTP_SERVER", "").strip()
+          smtp_port = int(os.environ.get("SMTP_PORT", "465"))
+          smtp_user = os.environ.get("SMTP_USERNAME", "").strip()
+          smtp_pass = os.environ.get("SMTP_PASSWORD", "").strip()
+          email_to = os.environ.get("EMAIL_TO", "").strip()
+          email_from = (os.environ.get("EMAIL_FROM", "") or smtp_user).strip()
+
+          missing = [k for k,v in {
+              "SMTP_SERVER": smtp_server,
+              "SMTP_USERNAME": smtp_user,
+              "SMTP_PASSWORD": smtp_pass,
+              "EMAIL_TO": email_to,
+              "EMAIL_FROM": email_from,
+          }.items() if not v]
+
+          if missing:
+              raise SystemExit("Missing secrets: " + ", ".join(missing))
+
+          html_path = Path("output/weekly_report.html")
+          if not html_path.exists():
+              raise SystemExit("output/weekly_report.html not found")
+
+          html = html_path.read_text(encoding="utf-8")
+
+          msg = EmailMessage()
+          msg["Subject"] = "TQQQ Vol Target — Weekly Report"
+          msg["From"] = email_from
+          msg["To"] = email_to
+
+          msg.set_content("HTML report attached. If you cannot view HTML, open the attachment.")
+          msg.add_alternative(html, subtype="html")
+          msg.add_attachment(html.encode("utf-8"), maintype="text", subtype="html", filename="weekly_report.html")
+
+          with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30) as s:
+              s.login(smtp_user, smtp_pass)
+              s.send_message(msg)
+
+          print("✅ Email sent to", email_to)
+          PY
+
+      # ------------------------------
+      # PUSHOVER
+      # ------------------------------
+      - name: Send Pushover notification
+        env:
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+        run: |
+          python - << 'PY'
+          import os, urllib.request, urllib.parse
+          from pathlib import Path
+
+          user = (os.environ.get("PUSHOVER_USER_KEY") or "").strip()
+          token = (os.environ.get("PUSHOVER_API_TOKEN") or "").strip()
+
+          if not user or not token:
+              raise SystemExit("Missing PUSHOVER_USER_KEY and/or PUSHOVER_API_TOKEN secrets.")
+
+          # Message: read last line of logs/history.csv if present
+          msg = "Weekly report generated."
+          hist = Path("logs/history.csv")
+          if hist.exists():
+              lines = hist.read_text(encoding="utf-8").strip().splitlines()
+              if len(lines) >= 2:
+                  last = lines[-1].split(",")
+                  try:
+                      run_date = last[0]
+                      close = float(last[1])
+                      vol20 = float(last[2])
+                      alloc = float(last[4])
+                      msg = f"{run_date} • TQQQ ${close:.2f} • Vol20 {vol20*100:.1f}% • Alloc {alloc*100:.0f}%"
+                  except Exception:
+                      pass
+
+          data = urllib.parse.urlencode({
+              "token": token,
+              "user": user,
+              "title": "TQQQ Vol Target",
+              "message": msg
+          }).encode("utf-8")
+
+          req = urllib.request.Request("https://api.pushover.net/1/messages.json", data=data)
+          with urllib.request.urlopen(req, timeout=20) as r:
+              body = r.read().decode("utf-8", errors="ignore")
+              print("✅ Pushover response:", body[:250])
+          PY
+
+      # ------------------------------
+      # COMMIT/PUSH REPORT OUTPUTS
+      # ------------------------------
+      - name: Commit and push outputs (if changed)
         run: |
           set -e
-
           git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          git config user.email "github-actions@users.noreply.github.com"
 
-          # Make sure folders exist (won’t error if already present)
-          mkdir -p data logs output
+          git add output/weekly_report.html logs/history.csv logs/friday_run.log data/TQQQ.csv || true
 
-          # Stage the files you want tracked
-          git add data/ logs/ output/
-
-          # If nothing changed, exit cleanly
           if git diff --cached --quiet; then
-            echo "No changes to commit."
+            echo "No changes"
             exit 0
           fi
 
