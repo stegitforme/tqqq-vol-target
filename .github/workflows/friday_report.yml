@@ -6,6 +6,9 @@ on:
     - cron: "10 22 * * 5"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   run-report:
     runs-on: ubuntu-latest
@@ -13,6 +16,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -24,18 +29,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Fetch TQQQ data
+      - name: Run fetch + weekly report
         run: |
           python fetch_tqqq.py
-
-      - name: Run weekly report
-        run: |
           python weekly_report.py
 
-      - name: Commit outputs
+      - name: Commit outputs back to repo
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add data/TQQQ.csv output/*.html state/*.json logs/*.log || true
-          git commit -m "Weekly TQQQ vol report" || echo "No changes"
+
+          # Make sure these folders exist even if script didn't create them for some reason
+          mkdir -p data output logs
+
+          # Add EVERYTHING that changed (including new files/folders)
+          git add -A
+
+          # Commit only if something changed
+          git diff --cached --quiet && echo "No changes" || git commit -m "Weekly TQQQ vol report"
+
+          # Push to main
           git push
