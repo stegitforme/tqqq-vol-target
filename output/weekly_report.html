@@ -2,160 +2,175 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>TQQQ Volatility Target Report</title>
+<title>TQQQ Volatility Target</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-  :root {
-    --bg: #f6f7f9;
-    --card: #ffffff;
-    --text: #111827;
-    --muted: #6b7280;
-    --line: #e5e7eb;
-    --pill: #eef2ff;
-  }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial;
-    background: var(--bg);
-    color: var(--text);
-    padding: 38px 18px;
-  }
-  .card {
-    background: var(--card);
-    padding: 26px;
-    border-radius: 14px;
-    max-width: 860px;
-    margin: auto;
-    box-shadow: 0 10px 30px rgba(0,0,0,.08);
-  }
-  h1 { margin: 0 0 6px 0; font-size: 26px; }
-  .muted { color: var(--muted); font-size: 14px; }
-  .pill {
-    display: inline-block;
-    padding: 6px 12px;
-    border-radius: 999px;
-    background: var(--pill);
-    color: #1f2937;
-    font-size: 13px;
-    margin-top: 12px;
-  }
-  .grid {
-    margin-top: 18px;
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 14px;
-  }
-  @media (min-width: 860px) {
-    .grid { grid-template-columns: 1fr 1fr; }
-  }
-  .kv {
-    display: flex;
-    justify-content: space-between;
-    padding: 9px 0;
-    border-bottom: 1px solid var(--line);
-    font-size: 15px;
-  }
-  .kv:last-child { border-bottom: none; }
-  .subcard {
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 14px 14px 10px 14px;
-    background: #fbfbfc;
-  }
-  .subhead { font-weight: 700; margin-bottom: 6px; }
-  .muted2 { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
-  .rule {
-    margin-top: 14px;
-    padding: 14px 16px;
-    background: #f3f4f6;
-    border-radius: 12px;
-    font-size: 14px;
-    line-height: 1.55;
-  }
-  .tbl {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-  }
-  .tbl th, .tbl td {
-    text-align: left;
-    padding: 8px 8px;
-    border-bottom: 1px solid var(--line);
-  }
-  .tbl th { color: #374151; font-weight: 700; }
-  .spark { color: #111827; }
-  .sparkwrap { margin-top: 6px; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial;
+  background: #f6f7f9;
+  padding: 28px;
+}
+.wrap {
+  max-width: 980px;
+  margin: 0 auto;
+}
+h1 {
+  margin: 0 0 6px 0;
+  font-size: 34px;
+}
+.sub {
+  color: #6b7280;
+  font-size: 16px;
+  margin-bottom: 14px;
+}
+.pill {
+  display: inline-block;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: #eef3ff;
+  color: #1f2937;
+  font-size: 13px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 16px;
+}
+.card {
+  background: white;
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.08);
+  padding: 18px 18px;
+}
+.card h2 {
+  margin: 0 0 12px 0;
+  font-size: 18px;
+}
+.kv {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid #eef2f7;
+  font-size: 16px;
+}
+.kv:last-child { border-bottom: none; }
+.box {
+  background: #f1f4f8;
+  border-radius: 12px;
+  padding: 14px 16px;
+  line-height: 1.5;
+  color: #111827;
+}
+.chart-card {
+  margin-top: 16px;
+}
+.muted {
+  color: #6b7280;
+  font-size: 13px;
+  margin-top: 10px;
+}
+@media (max-width: 840px) {
+  .grid { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
-  <div class="card">
+  <div class="wrap">
     <h1>TQQQ Volatility Target</h1>
-    <div class="muted">Weekly sizing based on 20-day realized volatility (annualized)</div>
+    <div class="sub">Weekly sizing based on realized volatility</div>
     <div class="pill">Target Vol = 20% • Lookback = 20 days • Rounding = 5%</div>
 
-    <div style="height:16px"></div>
-
     <div class="grid">
-      <div class="subcard">
-        <div class="subhead">This week</div>
+      <div class="card">
+        <h2>This week</h2>
         <div class="kv"><b>Date</b><span>2026-01-08</span></div>
         <div class="kv"><b>TQQQ Close</b><span>$54.19</span></div>
         <div class="kv"><b>Realized Vol (20d)</b><span>42.1%</span></div>
+        <div style="height:8px"></div>
         <div class="kv"><b>Previous Allocation</b><span>50% TQQQ</span></div>
-        <div class="kv"><b>Current Allocation</b><span><b>50% TQQQ</b></span></div>
+        <div class="kv"><b>Current Allocation</b><span>50% TQQQ</span></div>
         <div class="kv"><b>Cash / BIL</b><span>50%</span></div>
       </div>
 
-      <div class="subcard">
-        <div class="subhead">Trend (last 365 days)</div>
-        <div class="muted2">Allocation and volatility history from automation runs.</div>
-
-        <div class="muted2"><b>% in TQQQ</b></div>
-        <div class="sparkwrap">
-          <svg viewBox="0 0 640 56" width="100%" height="56" class="spark">
-            <polyline fill="none" stroke="currentColor" stroke-width="2" points="6.0,50.0 634.0,50.0"/>
-          </svg>
-        </div>
-
-        <div style="height:10px"></div>
-
-        <div class="muted2"><b>Realized Vol (20d)</b></div>
-        <div class="sparkwrap">
-          <svg viewBox="0 0 640 56" width="100%" height="56" class="spark">
-            <polyline fill="none" stroke="currentColor" stroke-width="2" points="6.0,50.0 634.0,6.0"/>
-          </svg>
+      <div class="card">
+        <h2>How it works</h2>
+        <div class="box">
+          • Compute 20-day realized volatility (annualized) from daily closes.<br/>
+          • Allocation ≈ TargetVol ÷ RealizedVol (clamped 0–100%).<br/>
+          • Round to 5% steps to reduce churn.<br/>
+          • Run after Friday close; execute Monday after the open.<br/>
+          • “Cash” sleeve can be BIL/SGOV (or your preferred T-bill ETF).
         </div>
       </div>
     </div>
 
-    
-      <div class="subcard">
-        <div class="subhead">Rule-of-thumb examples</div>
-        <div class="muted2">If realized vol is higher, your TQQQ allocation drops.</div>
-        <table class="tbl">
-          <thead><tr><th>Realized vol (20d, ann.)</th><th>TQQQ alloc</th><th>Cash/BIL</th></tr></thead>
-          <tbody>
-            <tr><td>20%</td><td><b>100%</b></td><td>0%</td></tr>
-<tr><td>30%</td><td><b>65%</b></td><td>35%</td></tr>
-<tr><td>40%</td><td><b>50%</b></td><td>50%</td></tr>
-<tr><td>50%</td><td><b>40%</b></td><td>60%</td></tr>
-<tr><td>60%</td><td><b>35%</b></td><td>65%</td></tr>
-<tr><td>80%</td><td><b>25%</b></td><td>75%</td></tr>
-<tr><td>100%</td><td><b>20%</b></td><td>80%</td></tr>
-          </tbody>
-        </table>
+    <div class="card chart-card">
+      <h2>Last 365 days trend (allocation + vol)</h2>
+      <canvas id="trend" height="110"></canvas>
+      <div class="muted">
+        Data comes from logs/history.csv (updated each run). Allocation is rounded to 5% steps.
       </div>
-    
-
-    <div class="rule">
-      <b>How it works (reminder)</b><br>
-      • Compute 20-day realized volatility (annualized) from daily closes.<br>
-      • Allocation ≈ TargetVol ÷ RealizedVol (clamped 0–100%).<br>
-      • Rounded to 5% steps to reduce churn.<br>
-      • Run after Friday close; execute Monday after open.
     </div>
 
-    <div class="muted" style="margin-top:14px;">
+    <div class="muted" style="margin-top:12px;">
       Generated by automation. Data source: yfinance.
     </div>
   </div>
+
+<script>
+const labels = ['2026-01-07','2026-01-08'];
+const alloc = [50.0,50.0];
+const vol = [41.66,42.08];
+
+const ctx = document.getElementById('trend').getContext('2d');
+new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels,
+    datasets: [
+      {
+        label: 'TQQQ Allocation (%)',
+        data: alloc,
+        borderWidth: 2,
+        tension: 0.25,
+        yAxisID: 'y'
+      },
+      {
+        label: 'Realized Vol 20d (%)',
+        data: vol,
+        borderWidth: 2,
+        tension: 0.25,
+        yAxisID: 'y1'
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    interaction: {
+      mode: 'index',
+      intersect: false
+    },
+    plugins: {
+      legend: {
+        position: 'top'
+      }
+    },
+    scales: {
+      y: {
+        title: { display: true, text: 'Allocation (%)' },
+        min: 0,
+        max: 100
+      },
+      y1: {
+        position: 'right',
+        title: { display: true, text: 'Realized Vol (%)' },
+        grid: { drawOnChartArea: false }
+      }
+    }
+  }
+});
+</script>
 </body>
 </html>
