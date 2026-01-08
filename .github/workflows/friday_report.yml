@@ -59,7 +59,7 @@ jobs:
         uses: actions/deploy-pages@v4
 
       # -----------------------------
-      # Prepare link + message text
+      # Prepare notification text
       # -----------------------------
       - name: Prepare notification text
         shell: bash
@@ -67,10 +67,11 @@ jobs:
           set -euo pipefail
 
           REPORT_URL="https://stegitforme.github.io/tqqq-vol-target/weekly_report.html"
+
           SUBJECT="$(cat output/subject.txt 2>/dev/null || echo 'TQQQ Vol Target Weekly Report')"
           MESSAGE="$(cat output/message.txt 2>/dev/null || echo 'Report generated.')"
 
-          # Export to env safely (handles spaces/newlines)
+          # Export safely (subject may contain spaces)
           {
             echo "REPORT_URL=$REPORT_URL"
             echo "SUBJECT<<EOF"
@@ -109,7 +110,6 @@ jobs:
             exit 1
           fi
 
-          # Send and validate response status==1
           RESP="$(curl -s \
             --form-string "token=$PUSHOVER_API_TOKEN" \
             --form-string "user=$PUSHOVER_USER_KEY" \
@@ -121,16 +121,12 @@ jobs:
 
           echo "$RESP"
 
-          python - << 'PY'
-          import json, sys
-          resp = json.loads(sys.stdin.read())
-          if int(resp.get("status", 0)) != 1:
-              raise SystemExit("❌ Pushover returned status != 1")
-          print("✅ Pushover sent")
-          PY <<< "$RESP"
+          python -c "import json,sys; r=json.loads(sys.stdin.read()); \
+print('✅ Pushover sent' if int(r.get('status',0))==1 else '❌ Pushover failed'); \
+sys.exit(0 if int(r.get('status',0))==1 else 1)" <<< "$RESP"
 
       # -----------------------------
-      # Email (SMTP)
+      # Email (SMTP) — sanitize NBSP in secrets
       # -----------------------------
       - name: Send email (SMTP)
         if: always()
@@ -149,24 +145,31 @@ jobs:
           import os, ssl, smtplib
           from email.message import EmailMessage
 
+          def clean(s: str) -> str:
+              # Replace non-breaking spaces and strip
+              return (s or "").replace("\u00a0", " ").strip()
+
           def req(name: str) -> str:
-              v = (os.environ.get(name) or "").strip()
+              v = clean(os.environ.get(name, ""))
               if not v:
                   raise SystemExit(f"❌ Missing {name} (secret/env)")
               return v
 
-          smtp_server = req("SMTP_SERVER")   # strip() fixes trailing-space DNS failures
+          smtp_server = req("SMTP_SERVER")
           smtp_port   = int(req("SMTP_PORT"))
           smtp_user   = req("SMTP_USERNAME")
           smtp_pass   = req("SMTP_PASSWORD")
           email_from  = req("EMAIL_FROM")
           email_to    = req("EMAIL_TO")
 
-          subject = (os.environ.get("SUBJECT") or "TQQQ Vol Target Weekly Report").strip()
-          report_url = (os.environ.get("REPORT_URL") or "").strip()
+          subject = clean(os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report"))
+          report_url = clean(os.environ.get("REPORT_URL", ""))
 
           with open("/tmp/notify_body.txt", "r", encoding="utf-8") as f:
               body = f.read()
+
+          # Extra safety: make sure the email body is clean text
+          body = body.replace("\u00a0", " ")
 
           msg = EmailMessage()
           msg["From"] = email_from
@@ -176,7 +179,6 @@ jobs:
 
           ctx = ssl.create_default_context()
 
-          # Support both 587 (STARTTLS) and 465 (SSL)
           if smtp_port == 465:
               with smtplib.SMTP_SSL(smtp_server, smtp_port, context=ctx, timeout=30) as s:
                   s.login(smtp_user, smtp_pass)
