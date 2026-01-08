@@ -35,11 +35,13 @@ jobs:
 
       - name: Run weekly report
         run: |
+          set -e
           python fetch_tqqq.py
           python weekly_report.py
 
       - name: Commit updated data + report
         run: |
+          set -e
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add data/ logs/ output/
@@ -62,22 +64,15 @@ jobs:
       # Prepare notification text
       # -----------------------------
       - name: Prepare notification text
-        shell: bash
         run: |
-          set -euo pipefail
-
+          set -e
           REPORT_URL="https://stegitforme.github.io/tqqq-vol-target/weekly_report.html"
 
           SUBJECT="$(cat output/subject.txt 2>/dev/null || echo 'TQQQ Vol Target Weekly Report')"
           MESSAGE="$(cat output/message.txt 2>/dev/null || echo 'Report generated.')"
 
-          # Export safely (subject may contain spaces)
-          {
-            echo "REPORT_URL=$REPORT_URL"
-            echo "SUBJECT<<EOF"
-            echo "$SUBJECT"
-            echo "EOF"
-          } >> "$GITHUB_ENV"
+          echo "REPORT_URL=$REPORT_URL" >> "$GITHUB_ENV"
+          echo "SUBJECT=$SUBJECT" >> "$GITHUB_ENV"
 
           {
             echo "$MESSAGE"
@@ -94,12 +89,11 @@ jobs:
       # -----------------------------
       - name: Send Pushover notification
         if: always()
-        shell: bash
         env:
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
         run: |
-          set -euo pipefail
+          set -e
 
           if [ -z "${PUSHOVER_USER_KEY:-}" ]; then
             echo "❌ Missing PUSHOVER_USER_KEY secret"
@@ -110,27 +104,20 @@ jobs:
             exit 1
           fi
 
-          RESP="$(curl -s \
+          curl -s \
             --form-string "token=$PUSHOVER_API_TOKEN" \
             --form-string "user=$PUSHOVER_USER_KEY" \
             --form-string "title=$SUBJECT" \
             --form-string "message=$(cat /tmp/notify_body.txt)" \
             --form-string "url=$REPORT_URL" \
             --form-string "url_title=Open live report (chart)" \
-            https://api.pushover.net/1/messages.json)"
-
-          echo "$RESP"
-
-          python -c "import json,sys; r=json.loads(sys.stdin.read()); \
-print('✅ Pushover sent' if int(r.get('status',0))==1 else '❌ Pushover failed'); \
-sys.exit(0 if int(r.get('status',0))==1 else 1)" <<< "$RESP"
+            https://api.pushover.net/1/messages.json
 
       # -----------------------------
-      # Email (SMTP) — sanitize NBSP in secrets
+      # Email (SMTP)
       # -----------------------------
       - name: Send email (SMTP)
         if: always()
-        shell: bash
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -139,37 +126,23 @@ sys.exit(0 if int(r.get('status',0))==1 else 1)" <<< "$RESP"
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: |
-          set -euo pipefail
-
           python - << 'PY'
-          import os, ssl, smtplib
+          import os, smtplib
           from email.message import EmailMessage
 
-          def clean(s: str) -> str:
-              # Replace non-breaking spaces and strip
-              return (s or "").replace("\u00a0", " ").strip()
+          smtp_server = os.environ["SMTP_SERVER"]
+          smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+          smtp_user = os.environ["SMTP_USERNAME"]
 
-          def req(name: str) -> str:
-              v = clean(os.environ.get(name, ""))
-              if not v:
-                  raise SystemExit(f"❌ Missing {name} (secret/env)")
-              return v
+          # IMPORTANT: sanitize app password (fixes \xa0 / non-breaking spaces)
+          smtp_pass = os.environ["SMTP_PASSWORD"]
+          smtp_pass = smtp_pass.replace("\u00a0", "").strip()
 
-          smtp_server = req("SMTP_SERVER")
-          smtp_port   = int(req("SMTP_PORT"))
-          smtp_user   = req("SMTP_USERNAME")
-          smtp_pass   = req("SMTP_PASSWORD")
-          email_from  = req("EMAIL_FROM")
-          email_to    = req("EMAIL_TO")
+          email_from = os.environ["EMAIL_FROM"]
+          email_to = os.environ["EMAIL_TO"]
 
-          subject = clean(os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report"))
-          report_url = clean(os.environ.get("REPORT_URL", ""))
-
-          with open("/tmp/notify_body.txt", "r", encoding="utf-8") as f:
-              body = f.read()
-
-          # Extra safety: make sure the email body is clean text
-          body = body.replace("\u00a0", " ")
+          subject = os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report")
+          body = open("/tmp/notify_body.txt", "r", encoding="utf-8").read()
 
           msg = EmailMessage()
           msg["From"] = email_from
@@ -177,21 +150,11 @@ sys.exit(0 if int(r.get('status',0))==1 else 1)" <<< "$RESP"
           msg["Subject"] = subject
           msg.set_content(body, charset="utf-8")
 
-          ctx = ssl.create_default_context()
-
-          if smtp_port == 465:
-              with smtplib.SMTP_SSL(smtp_server, smtp_port, context=ctx, timeout=30) as s:
-                  s.login(smtp_user, smtp_pass)
-                  s.send_message(msg)
-          else:
-              with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as s:
-                  s.ehlo()
-                  s.starttls(context=ctx)
-                  s.ehlo()
-                  s.login(smtp_user, smtp_pass)
-                  s.send_message(msg)
+          with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as s:
+              s.ehlo()
+              s.starttls()
+              s.login(smtp_user, smtp_pass)
+              s.send_message(msg)
 
           print(f"✅ Email sent to {email_to}")
-          if report_url:
-              print(f"Report URL: {report_url}")
           PY
