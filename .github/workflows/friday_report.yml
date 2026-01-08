@@ -1,11 +1,10 @@
-name: TQQQ Vol Target Weekly Report
+name: Weekly TQQQ Volatility Report
 
 on:
-  workflow_dispatch: {}
   schedule:
-    # Friday 22:10 UTC ≈ Friday 2:10pm Los Angeles (PST)
-    # During daylight savings, this will be ~1 hour later
+    # Every Friday at 22:10 UTC (~5:10pm ET after market close)
     - cron: "10 22 * * 5"
+  workflow_dispatch:
 
 jobs:
   run-report:
@@ -25,21 +24,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Debug step so we can always see what files exist
-      - name: Debug - list repo files
+      - name: Fetch TQQQ data
         run: |
-          pwd
-          ls -la
+          python fetch_tqqq.py
 
       - name: Run weekly report
         run: |
           python weekly_report.py
 
-      - name: Upload weekly report artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: weekly-report
-          path: |
-            output/weekly_report.html
-            data/TQQQ.csv
-            logs/
+      - name: Commit outputs
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add data/TQQQ.csv output/*.html state/*.json logs/*.log || true
+          git commit -m "Weekly TQQQ vol report" || echo "No changes"
+          git push
