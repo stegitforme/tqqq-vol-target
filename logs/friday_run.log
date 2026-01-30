@@ -107,3 +107,9 @@
 [2026-01-23 23:32:15 UTC] Wrote subject: TQQQ Vol Target | 55% TQQQ / 45% Cash | Vol20=37.7%
 [2026-01-23 23:32:15 UTC] Wrote report: /home/runner/work/tqqq-vol-target/tqqq-vol-target/output/weekly_report.html
 [2026-01-23 23:32:15 UTC] Weekly report completed successfully
+[2026-01-30 23:37:09 UTC] Starting weekly TQQQ volatility report
+[2026-01-30 23:37:09 UTC] Fetching TQQQ price data
+[2026-01-30 23:37:10 UTC] Prev: 50%  Curr: 50%  Cash: 50%
+[2026-01-30 23:37:10 UTC] Wrote subject: TQQQ Vol Target | 50% TQQQ / 50% Cash | Vol20=40.4%
+[2026-01-30 23:37:10 UTC] Wrote report: /home/runner/work/tqqq-vol-target/tqqq-vol-target/output/weekly_report.html
+[2026-01-30 23:37:10 UTC] Weekly report completed successfully
