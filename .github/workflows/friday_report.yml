@@ -35,13 +35,11 @@ jobs:
 
       - name: Run weekly report
         run: |
-          set -e
           python fetch_tqqq.py
           python weekly_report.py
 
       - name: Commit updated data + report
         run: |
-          set -e
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add data/ logs/ output/
@@ -61,18 +59,20 @@ jobs:
         uses: actions/deploy-pages@v4
 
       # -----------------------------
-      # Prepare notification text
+      # Build link + message text (links to dated snapshot)
       # -----------------------------
       - name: Prepare notification text
         run: |
           set -e
-          REPORT_URL="https://stegitforme.github.io/tqqq-vol-target/weekly_report.html"
+
+          REPORT_PATH="$(cat output/report_path.txt 2>/dev/null || echo 'weekly_report.html')"
+          REPORT_URL="https://stegitforme.github.io/tqqq-vol-target/${REPORT_PATH}"
 
           SUBJECT="$(cat output/subject.txt 2>/dev/null || echo 'TQQQ Vol Target Weekly Report')"
           MESSAGE="$(cat output/message.txt 2>/dev/null || echo 'Report generated.')"
 
-          echo "REPORT_URL=$REPORT_URL" >> "$GITHUB_ENV"
-          echo "SUBJECT=$SUBJECT" >> "$GITHUB_ENV"
+          echo "REPORT_URL=$REPORT_URL" >> $GITHUB_ENV
+          echo "SUBJECT=$SUBJECT" >> $GITHUB_ENV
 
           {
             echo "$MESSAGE"
@@ -130,18 +130,17 @@ jobs:
           import os, smtplib
           from email.message import EmailMessage
 
-          smtp_server = os.environ["SMTP_SERVER"]
-          smtp_port = int(os.environ.get("SMTP_PORT", "587"))
-          smtp_user = os.environ["SMTP_USERNAME"]
+          smtp_server = os.environ["SMTP_SERVER"].strip()
+          smtp_port = int(str(os.environ.get("SMTP_PORT", "587")).strip())
+          smtp_user = os.environ["SMTP_USERNAME"].strip()
+          smtp_pass = os.environ["SMTP_PASSWORD"].strip()
+          email_from = os.environ["EMAIL_FROM"].strip()
+          email_to = os.environ["EMAIL_TO"].strip()
 
-          # IMPORTANT: sanitize app password (fixes \xa0 / non-breaking spaces)
-          smtp_pass = os.environ["SMTP_PASSWORD"]
-          smtp_pass = smtp_pass.replace("\u00a0", "").strip()
-
-          email_from = os.environ["EMAIL_FROM"]
-          email_to = os.environ["EMAIL_TO"]
-
+          # Prevent UnicodeEncodeError from non-breaking spaces in secrets/subject
           subject = os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report")
+          subject = subject.replace("\u00a0", " ").strip()
+
           body = open("/tmp/notify_body.txt", "r", encoding="utf-8").read()
 
           msg = EmailMessage()
