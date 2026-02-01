@@ -59,7 +59,7 @@ jobs:
         uses: actions/deploy-pages@v4
 
       # -----------------------------
-      # Build link + message text (links to dated snapshot)
+      # Build link + message text (links to dated snapshot if present)
       # -----------------------------
       - name: Prepare notification text
         run: |
@@ -130,18 +130,34 @@ jobs:
           import os, smtplib
           from email.message import EmailMessage
 
-          smtp_server = os.environ["SMTP_SERVER"].strip()
-          smtp_port = int(str(os.environ.get("SMTP_PORT", "587")).strip())
-          smtp_user = os.environ["SMTP_USERNAME"].strip()
-          smtp_pass = os.environ["SMTP_PASSWORD"].strip()
-          email_from = os.environ["EMAIL_FROM"].strip()
-          email_to = os.environ["EMAIL_TO"].strip()
+          def clean(s: str) -> str:
+              # Remove non-breaking spaces + trim
+              return (s or "").replace("\u00a0", " ").strip()
 
-          # Prevent UnicodeEncodeError from non-breaking spaces in secrets/subject
-          subject = os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report")
-          subject = subject.replace("\u00a0", " ").strip()
+          smtp_server = clean(os.environ.get("SMTP_SERVER", ""))
+          smtp_port = int(clean(os.environ.get("SMTP_PORT", "587")) or "587")
+          smtp_user = clean(os.environ.get("SMTP_USERNAME", ""))
+          smtp_pass = clean(os.environ.get("SMTP_PASSWORD", ""))
+          email_from = clean(os.environ.get("EMAIL_FROM", ""))
+          email_to = clean(os.environ.get("EMAIL_TO", ""))
 
+          # Subject can contain non-ascii; that's fine. But clean NBSP anyway.
+          subject = clean(os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report"))
           body = open("/tmp/notify_body.txt", "r", encoding="utf-8").read()
+
+          # Fail fast with clear errors if secrets are blank
+          missing = []
+          for k, v in [
+              ("SMTP_SERVER", smtp_server),
+              ("SMTP_USERNAME", smtp_user),
+              ("SMTP_PASSWORD", smtp_pass),
+              ("EMAIL_FROM", email_from),
+              ("EMAIL_TO", email_to),
+          ]:
+              if not v:
+                  missing.append(k)
+          if missing:
+              raise SystemExit(f"❌ Missing/blank secrets: {', '.join(missing)}")
 
           msg = EmailMessage()
           msg["From"] = email_from
