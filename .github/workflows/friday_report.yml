@@ -1,7 +1,19 @@
 name: Friday TQQQ Vol Report
 
 on:
+  # Manual run supports "mode"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "official = updates official history (Fri-only). debug = no official history updates"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - official
+
+  # Scheduled run is the OFFICIAL weekly run
   schedule:
     # Friday after market close (6:10pm ET ≈ 23:10 UTC)
     - cron: "10 23 * * 5"
@@ -33,48 +45,73 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run weekly report
+      # -----------------------------
+      # Decide mode (official vs debug)
+      # -----------------------------
+      - name: Resolve run mode
+        id: mode
         run: |
+          set -e
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "MODE=official" >> $GITHUB_ENV
+          else
+            echo "MODE=${{ inputs.mode }}" >> $GITHUB_ENV
+          fi
+          echo "Run mode: $MODE"
+
+      # -----------------------------
+      # Run report generation
+      # -----------------------------
+      - name: Run weekly report (generate HTML + helper files)
+        run: |
+          set -e
           python fetch_tqqq.py
           python weekly_report.py
 
-      - name: Commit updated data + report
+      # -----------------------------
+      # Official history locking (Fri-only)
+      # - Official runs update logs/history_official.csv
+      # - Debug runs do NOT touch official history
+      # -----------------------------
+      - name: Update OFFICIAL history (Friday only)
+        if: env.MODE == 'official'
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add data/ logs/ output/
-          git commit -m "Weekly TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
-          git push
+          set -e
+
+          mkdir -p logs
+          SRC="logs/history.csv"
+          OFF="logs/history_official.csv"
+
+          if [ ! -f "$SRC" ]; then
+            echo "❌ Missing $SRC"
+            exit 1
+          fi
+
+          # If official file doesn't exist yet, initialize it with header
+          if [ ! -f "$OFF" ]; then
+            head -n 1 "$SRC" > "$OFF"
+          fi
+
+          # Append ONLY the latest line (excluding header)
+          # This locks "official" state to one row per official run.
+          tail -n 1 "$SRC" >> "$OFF"
+
+          echo "✅ Updated $OFF"
 
       # -----------------------------
-      # Publish HTML to GitHub Pages
-      # -----------------------------
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: output
-
-      - name: Deploy to GitHub Pages
-        id: deploy
-        uses: actions/deploy-pages@v4
-
-      # -----------------------------
-      # Prepare notification text + dynamic report URL
+      # Prepare notification body + link to newest dated report
       # -----------------------------
       - name: Prepare notification text
         run: |
           set -e
 
-          # Expect weekly_report.py to write this file each run:
-          # e.g. "reports/2026-02-09.html"
-          if [ ! -f output/latest_report_path.txt ]; then
-            echo "❌ Missing output/latest_report_path.txt"
+          # These are written by weekly_report.py (new version)
+          if [ ! -f "output/latest_report_url.txt" ]; then
+            echo "❌ Missing output/latest_report_url.txt"
             exit 1
           fi
 
-          REPORT_PATH="$(cat output/latest_report_path.txt | tr -d '\r\n')"
-          REPORT_URL="https://stegitforme.github.io/tqqq-vol-target/${REPORT_PATH}"
-
+          REPORT_URL="$(cat output/latest_report_url.txt | tr -d '\r')"
           SUBJECT="$(cat output/subject.txt 2>/dev/null || echo 'TQQQ Vol Target Weekly Report')"
           MESSAGE="$(cat output/message.txt 2>/dev/null || echo 'Report generated.')"
 
@@ -84,12 +121,46 @@ jobs:
           {
             echo "$MESSAGE"
             echo ""
+            echo "Mode=$MODE"
+            echo ""
             echo "Open live report:"
             echo "$REPORT_URL"
             echo ""
             echo "Run:"
             echo "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } > /tmp/notify_body.txt
+
+      # -----------------------------
+      # Commit files
+      # - Always commit output/reports + output/weekly_report.html
+      # - Only official runs commit logs/history_official.csv
+      # -----------------------------
+      - name: Commit updated data + reports
+        run: |
+          set -e
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add data/ output/
+
+          if [ "$MODE" = "official" ]; then
+            git add logs/history_official.csv || true
+          fi
+
+          git commit -m "TQQQ vol report ($MODE) ($(date -u +%Y-%m-%d))" || echo "No changes"
+          git push
+
+      # -----------------------------
+      # Publish HTML to GitHub Pages (always)
+      # -----------------------------
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: output
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
 
       # -----------------------------
       # Push notification (Pushover)
@@ -121,7 +192,7 @@ jobs:
             https://api.pushover.net/1/messages.json
 
       # -----------------------------
-      # Email (SMTP)
+      # Email (SMTP) — sanitize creds to prevent \xa0 issues
       # -----------------------------
       - name: Send email (SMTP)
         if: always()
@@ -134,22 +205,34 @@ jobs:
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: |
           python - << 'PY'
-          import os, smtplib
+          import os, smtplib, re
           from email.message import EmailMessage
 
-          smtp_server = os.environ["SMTP_SERVER"]
-          smtp_port = int(os.environ.get("SMTP_PORT", "587"))
-          smtp_user = os.environ["SMTP_USERNAME"]
-          smtp_pass = os.environ["SMTP_PASSWORD"]
-          email_from = os.environ["EMAIL_FROM"]
-          email_to = os.environ["EMAIL_TO"]
+          def clean(s: str) -> str:
+            # Remove non-breaking spaces and zero-width chars, trim
+            return (s or "").replace("\u00a0", " ").replace("\u200b", "").strip()
 
-          subject = os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report")
+          smtp_server = clean(os.environ.get("SMTP_SERVER",""))
+          smtp_port = int(clean(os.environ.get("SMTP_PORT","587")) or "587")
+          smtp_user = clean(os.environ.get("SMTP_USERNAME",""))
+          smtp_pass = clean(os.environ.get("SMTP_PASSWORD",""))
+          email_from = clean(os.environ.get("EMAIL_FROM",""))
+          email_to = clean(os.environ.get("EMAIL_TO",""))
+
+          # Basic validation to avoid confusing socket errors
+          if not smtp_server:
+            raise RuntimeError("Missing SMTP_SERVER")
+          if not smtp_user:
+            raise RuntimeError("Missing SMTP_USERNAME")
+          if not smtp_pass:
+            raise RuntimeError("Missing SMTP_PASSWORD")
+          if not email_from:
+            raise RuntimeError("Missing EMAIL_FROM")
+          if not email_to:
+            raise RuntimeError("Missing EMAIL_TO")
+
+          subject = clean(os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report"))
           body = open("/tmp/notify_body.txt", "r", encoding="utf-8").read()
-
-          # sanitize any non-breaking spaces in secrets or text (prevents \xa0 issues)
-          smtp_user = smtp_user.replace("\u00A0", " ").strip()
-          smtp_pass = smtp_pass.replace("\u00A0", " ").strip()
 
           msg = EmailMessage()
           msg["From"] = email_from
