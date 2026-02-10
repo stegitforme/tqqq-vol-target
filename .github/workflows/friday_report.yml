@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: "official = Friday-only (does NOT get polluted by debug). debug = safe manual test."
+        description: "Run mode (debug or official). Official is blocked unless it's Friday (UTC)."
         required: true
         default: "debug"
         type: choice
         options:
-          - official
           - debug
+          - official
   schedule:
     # Friday after market close (6:10pm ET ≈ 23:10 UTC)
     - cron: "10 23 * * 5"
@@ -33,27 +33,30 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Decide run mode
-        id: mode
         run: |
           set -e
-          # If scheduled, force official
+          # scheduled runs => official
           if [ "${{ github.event_name }}" = "schedule" ]; then
             echo "RUN_MODE=official" >> $GITHUB_ENV
           else
             echo "RUN_MODE=${{ inputs.run_mode }}" >> $GITHUB_ENV
           fi
-          echo "Run mode: $RUN_MODE"
 
       - name: Guardrail - Official only allowed on Friday
         run: |
           set -e
-          if [ "${RUN_MODE}" = "official" ]; then
-            DOW="$(date -u +%u)"   # 1=Mon ... 5=Fri
-            if [ "$DOW" != "5" ]; then
-              echo "❌ Official run blocked: today is not Friday (UTC day=$DOW). Use debug mode."
-              exit 1
-            fi
+          if [ "${RUN_MODE}" != "official" ]; then
+            echo "✅ Debug mode allowed (RUN_MODE=${RUN_MODE})"
+            exit 0
           fi
+
+          # Official mode: only allow on Friday (UTC)
+          DOW="$(date -u +%u)"   # 1=Mon ... 5=Fri ... 7=Sun
+          if [ "$DOW" != "5" ]; then
+            echo "❌ Official run blocked: today is not Friday (UTC day=$DOW). Use debug mode."
+            exit 1
+          fi
+          echo "✅ Official mode allowed (Friday UTC)"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -66,53 +69,42 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run weekly report
-        env:
-          RUN_MODE: ${{ env.RUN_MODE }}
         run: |
-          set -e
           python fetch_tqqq.py
-          # weekly_report.py will use RUN_MODE to write to official vs debug history
           python weekly_report.py
 
       - name: Commit updated data + report
         run: |
-          set -e
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add data/ logs/ output/
-          git commit -m "Weekly TQQQ vol report ($(date -u +%Y-%m-%d)) [$RUN_MODE]" || echo "No changes"
+          git commit -m "Weekly TQQQ vol report ($(date -u +%Y-%m-%d)) [${RUN_MODE}]" || echo "No changes"
           git push
 
-      # -----------------------------
       # Publish HTML to GitHub Pages
-      # -----------------------------
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: output
 
       - name: Deploy to GitHub Pages
-        id: deploy
         uses: actions/deploy-pages@v4
 
-      # -----------------------------
-      # Prepare notification text (ALWAYS creates /tmp/notify_body.txt)
-      # -----------------------------
+      # Prepare notification text (always, but only if the report exists)
       - name: Prepare notification text
         if: always()
         run: |
           set -e
 
-          # Prefer newest dated report if weekly_report.py wrote it
-          if [ -f output/latest_report_path.txt ]; then
-            LATEST_PATH="$(cat output/latest_report_path.txt)"
-            REPORT_URL="https://stegitforme.github.io/tqqq-vol-target/${LATEST_PATH}"
-          else
-            REPORT_URL="https://stegitforme.github.io/tqqq-vol-target/weekly_report.html"
+          if [ ! -f "output/subject.txt" ] || [ ! -f "output/message.txt" ] || [ ! -f "output/latest_report_url.txt" ]; then
+            echo "⚠️ Report files not found (run likely blocked). Skipping notify body."
+            echo "SKIP_NOTIFICATIONS=1" >> $GITHUB_ENV
+            exit 0
           fi
 
-          SUBJECT="$(cat output/subject.txt 2>/dev/null || echo 'TQQQ Vol Target Weekly Report')"
-          MESSAGE="$(cat output/message.txt 2>/dev/null || echo 'Report generated.')"
+          REPORT_URL="$(cat output/latest_report_url.txt)"
+          SUBJECT="$(cat output/subject.txt)"
+          MESSAGE="$(cat output/message.txt)"
 
           echo "REPORT_URL=$REPORT_URL" >> $GITHUB_ENV
           echo "SUBJECT=$SUBJECT" >> $GITHUB_ENV
@@ -125,13 +117,9 @@ jobs:
             echo ""
             echo "Run:"
             echo "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-            echo ""
-            echo "Mode: ${RUN_MODE}"
           } > /tmp/notify_body.txt
 
-      # -----------------------------
       # Push notification (Pushover)
-      # -----------------------------
       - name: Send Pushover notification
         if: always()
         env:
@@ -139,6 +127,11 @@ jobs:
           PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
         run: |
           set -e
+
+          if [ "${SKIP_NOTIFICATIONS:-0}" = "1" ]; then
+            echo "Skipping Pushover (no report generated)."
+            exit 0
+          fi
 
           if [ -z "${PUSHOVER_USER_KEY:-}" ]; then
             echo "❌ Missing PUSHOVER_USER_KEY secret"
@@ -158,9 +151,7 @@ jobs:
             --form-string "url_title=Open live report (chart)" \
             https://api.pushover.net/1/messages.json
 
-      # -----------------------------
       # Email (SMTP)
-      # -----------------------------
       - name: Send email (SMTP)
         if: always()
         env:
@@ -175,25 +166,24 @@ jobs:
           import os, smtplib
           from email.message import EmailMessage
 
-          def clean(s: str) -> str:
-            # Fix the UnicodeEncodeError caused by non-breaking spaces copied into secrets
-            return (s or "").replace("\u00a0", " ").strip()
+          if os.environ.get("SKIP_NOTIFICATIONS", "0") == "1":
+              print("Skipping email (no report generated).")
+              raise SystemExit(0)
 
-          smtp_server = clean(os.environ.get("SMTP_SERVER",""))
-          smtp_port = int(clean(os.environ.get("SMTP_PORT","587")) or "587")
-          smtp_user = clean(os.environ.get("SMTP_USERNAME",""))
-          smtp_pass = clean(os.environ.get("SMTP_PASSWORD",""))
-          email_from = clean(os.environ.get("EMAIL_FROM",""))
-          email_to = clean(os.environ.get("EMAIL_TO",""))
+          notify_path = "/tmp/notify_body.txt"
+          if not os.path.exists(notify_path):
+              print("Skipping email: notify body missing.")
+              raise SystemExit(0)
+
+          smtp_server = os.environ["SMTP_SERVER"]
+          smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+          smtp_user = os.environ["SMTP_USERNAME"]
+          smtp_pass = os.environ["SMTP_PASSWORD"]
+          email_from = os.environ["EMAIL_FROM"]
+          email_to = os.environ["EMAIL_TO"]
 
           subject = os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report")
-          report_url = os.environ.get("REPORT_URL", "")
-
-          # /tmp/notify_body.txt is created in Prepare step, but guard anyway
-          try:
-            body = open("/tmp/notify_body.txt", "r", encoding="utf-8").read()
-          except FileNotFoundError:
-            body = f"Report generated.\n\nOpen live report:\n{report_url}\n"
+          body = open(notify_path, "r", encoding="utf-8").read()
 
           msg = EmailMessage()
           msg["From"] = email_from
@@ -202,10 +192,10 @@ jobs:
           msg.set_content(body, charset="utf-8")
 
           with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as s:
-            s.ehlo()
-            s.starttls()
-            s.login(smtp_user, smtp_pass)
-            s.send_message(msg)
+              s.ehlo()
+              s.starttls()
+              s.login(smtp_user, smtp_pass)
+              s.send_message(msg)
 
           print(f"✅ Email sent to {email_to}")
           PY
