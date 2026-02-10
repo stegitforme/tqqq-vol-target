@@ -59,13 +59,20 @@ jobs:
         uses: actions/deploy-pages@v4
 
       # -----------------------------
-      # Build link + message text (links to dated snapshot if present)
+      # Prepare notification text + dynamic report URL
       # -----------------------------
       - name: Prepare notification text
         run: |
           set -e
 
-          REPORT_PATH="$(cat output/report_path.txt 2>/dev/null || echo 'weekly_report.html')"
+          # Expect weekly_report.py to write this file each run:
+          # e.g. "reports/2026-02-09.html"
+          if [ ! -f output/latest_report_path.txt ]; then
+            echo "❌ Missing output/latest_report_path.txt"
+            exit 1
+          fi
+
+          REPORT_PATH="$(cat output/latest_report_path.txt | tr -d '\r\n')"
           REPORT_URL="https://stegitforme.github.io/tqqq-vol-target/${REPORT_PATH}"
 
           SUBJECT="$(cat output/subject.txt 2>/dev/null || echo 'TQQQ Vol Target Weekly Report')"
@@ -130,34 +137,19 @@ jobs:
           import os, smtplib
           from email.message import EmailMessage
 
-          def clean(s: str) -> str:
-              # Remove non-breaking spaces + trim
-              return (s or "").replace("\u00a0", " ").strip()
+          smtp_server = os.environ["SMTP_SERVER"]
+          smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+          smtp_user = os.environ["SMTP_USERNAME"]
+          smtp_pass = os.environ["SMTP_PASSWORD"]
+          email_from = os.environ["EMAIL_FROM"]
+          email_to = os.environ["EMAIL_TO"]
 
-          smtp_server = clean(os.environ.get("SMTP_SERVER", ""))
-          smtp_port = int(clean(os.environ.get("SMTP_PORT", "587")) or "587")
-          smtp_user = clean(os.environ.get("SMTP_USERNAME", ""))
-          smtp_pass = clean(os.environ.get("SMTP_PASSWORD", ""))
-          email_from = clean(os.environ.get("EMAIL_FROM", ""))
-          email_to = clean(os.environ.get("EMAIL_TO", ""))
-
-          # Subject can contain non-ascii; that's fine. But clean NBSP anyway.
-          subject = clean(os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report"))
+          subject = os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report")
           body = open("/tmp/notify_body.txt", "r", encoding="utf-8").read()
 
-          # Fail fast with clear errors if secrets are blank
-          missing = []
-          for k, v in [
-              ("SMTP_SERVER", smtp_server),
-              ("SMTP_USERNAME", smtp_user),
-              ("SMTP_PASSWORD", smtp_pass),
-              ("EMAIL_FROM", email_from),
-              ("EMAIL_TO", email_to),
-          ]:
-              if not v:
-                  missing.append(k)
-          if missing:
-              raise SystemExit(f"❌ Missing/blank secrets: {', '.join(missing)}")
+          # sanitize any non-breaking spaces in secrets or text (prevents \xa0 issues)
+          smtp_user = smtp_user.replace("\u00A0", " ").strip()
+          smtp_pass = smtp_pass.replace("\u00A0", " ").strip()
 
           msg = EmailMessage()
           msg["From"] = email_from
@@ -166,10 +158,10 @@ jobs:
           msg.set_content(body, charset="utf-8")
 
           with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as s:
-              s.ehlo()
-              s.starttls()
-              s.login(smtp_user, smtp_pass)
-              s.send_message(msg)
+            s.ehlo()
+            s.starttls()
+            s.login(smtp_user, smtp_pass)
+            s.send_message(msg)
 
           print(f"✅ Email sent to {email_to}")
           PY
