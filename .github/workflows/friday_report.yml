@@ -3,9 +3,9 @@ name: Friday TQQQ Vol Report
 on:
   workflow_dispatch:
     inputs:
-      run_mode:
-        description: "Run mode (debug or official). Official is blocked unless it's Friday (UTC)."
-        required: true
+      mode:
+        description: "Run mode"
+        required: false
         default: "debug"
         type: choice
         options:
@@ -29,35 +29,37 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # -----------------------------
+      # Checkout
+      # -----------------------------
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      # -----------------------------
+      # Decide run mode
+      # -----------------------------
       - name: Decide run mode
+        id: mode
         run: |
-          set -e
-          # scheduled runs => official
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "RUN_MODE=official" >> $GITHUB_ENV
-          else
-            echo "RUN_MODE=${{ inputs.run_mode }}" >> $GITHUB_ENV
-          fi
+          MODE="${{ github.event.inputs.mode || 'official' }}"
+          TODAY_UTC=$(date -u +%u)
 
-      - name: Guardrail - Official only allowed on Friday
-        run: |
-          set -e
-          if [ "${RUN_MODE}" != "official" ]; then
-            echo "✅ Debug mode allowed (RUN_MODE=${RUN_MODE})"
-            exit 0
-          fi
-
-          # Official mode: only allow on Friday (UTC)
-          DOW="$(date -u +%u)"   # 1=Mon ... 5=Fri ... 7=Sun
-          if [ "$DOW" != "5" ]; then
-            echo "❌ Official run blocked: today is not Friday (UTC day=$DOW). Use debug mode."
+          if [ "$MODE" = "official" ] && [ "$TODAY_UTC" != "5" ]; then
+            echo "❌ Official run blocked: today is not Friday (UTC day=$TODAY_UTC). Use debug mode."
             exit 1
           fi
-          echo "✅ Official mode allowed (Friday UTC)"
 
+          if [ "$MODE" = "debug" ]; then
+            echo "DEBUG_RUN=1" >> $GITHUB_ENV
+          else
+            echo "DEBUG_RUN=0" >> $GITHUB_ENV
+          fi
+
+          echo "Run mode: $MODE"
+
+      # -----------------------------
+      # Python
+      # -----------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -68,20 +70,35 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # -----------------------------
+      # Generate report
+      # -----------------------------
       - name: Run weekly report
         run: |
           python fetch_tqqq.py
           python weekly_report.py
 
+      # -----------------------------
+      # Commit data + report
+      # -----------------------------
       - name: Commit updated data + report
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add data/ logs/ output/
-          git commit -m "Weekly TQQQ vol report ($(date -u +%Y-%m-%d)) [${RUN_MODE}]" || echo "No changes"
+
+          if [ "$DEBUG_RUN" = "1" ]; then
+            git add output/ reports/ logs/history.csv || true
+            git commit -m "Debug TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
+          else
+            git add output/ reports/ logs/history.csv logs/history_official.csv || true
+            git commit -m "Weekly TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
+          fi
+
           git push
 
-      # Publish HTML to GitHub Pages
+      # -----------------------------
+      # GitHub Pages
+      # -----------------------------
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -90,24 +107,18 @@ jobs:
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
 
-      # Prepare notification text (always, but only if the report exists)
+      # -----------------------------
+      # Prepare notification text
+      # -----------------------------
       - name: Prepare notification text
-        if: always()
         run: |
           set -e
 
-          if [ ! -f "output/subject.txt" ] || [ ! -f "output/message.txt" ] || [ ! -f "output/latest_report_url.txt" ]; then
-            echo "⚠️ Report files not found (run likely blocked). Skipping notify body."
-            echo "SKIP_NOTIFICATIONS=1" >> $GITHUB_ENV
-            exit 0
-          fi
-
+          REPORT_PATH="$(cat output/latest_report_path.txt)"
           REPORT_URL="$(cat output/latest_report_url.txt)"
+
           SUBJECT="$(cat output/subject.txt)"
           MESSAGE="$(cat output/message.txt)"
-
-          echo "REPORT_URL=$REPORT_URL" >> $GITHUB_ENV
-          echo "SUBJECT=$SUBJECT" >> $GITHUB_ENV
 
           {
             echo "$MESSAGE"
@@ -119,27 +130,21 @@ jobs:
             echo "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } > /tmp/notify_body.txt
 
+          echo "REPORT_URL=$REPORT_URL" >> $GITHUB_ENV
+          echo "SUBJECT=$SUBJECT" >> $GITHUB_ENV
+
+      # -----------------------------
       # Push notification (Pushover)
+      # -----------------------------
       - name: Send Pushover notification
         if: always()
         env:
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
         run: |
-          set -e
-
-          if [ "${SKIP_NOTIFICATIONS:-0}" = "1" ]; then
-            echo "Skipping Pushover (no report generated)."
+          if [ -z "$PUSHOVER_USER_KEY" ] || [ -z "$PUSHOVER_API_TOKEN" ]; then
+            echo "Skipping Pushover (missing secrets)"
             exit 0
-          fi
-
-          if [ -z "${PUSHOVER_USER_KEY:-}" ]; then
-            echo "❌ Missing PUSHOVER_USER_KEY secret"
-            exit 1
-          fi
-          if [ -z "${PUSHOVER_API_TOKEN:-}" ]; then
-            echo "❌ Missing PUSHOVER_API_TOKEN secret"
-            exit 1
           fi
 
           curl -s \
@@ -148,10 +153,12 @@ jobs:
             --form-string "title=$SUBJECT" \
             --form-string "message=$(cat /tmp/notify_body.txt)" \
             --form-string "url=$REPORT_URL" \
-            --form-string "url_title=Open live report (chart)" \
+            --form-string "url_title=Open live report" \
             https://api.pushover.net/1/messages.json
 
-      # Email (SMTP)
+      # -----------------------------
+      # Email (SMTP) — SAFE VERSION
+      # -----------------------------
       - name: Send email (SMTP)
         if: always()
         env:
@@ -166,24 +173,23 @@ jobs:
           import os, smtplib
           from email.message import EmailMessage
 
-          if os.environ.get("SKIP_NOTIFICATIONS", "0") == "1":
-              print("Skipping email (no report generated).")
+          path = "/tmp/notify_body.txt"
+          if not os.path.exists(path):
+              print("Skipping email (no body)")
               raise SystemExit(0)
 
-          notify_path = "/tmp/notify_body.txt"
-          if not os.path.exists(notify_path):
-              print("Skipping email: notify body missing.")
-              raise SystemExit(0)
+          def clean(s):
+              return s.replace("\u00a0", " ").strip()
 
-          smtp_server = os.environ["SMTP_SERVER"]
-          smtp_port = int(os.environ.get("SMTP_PORT", "587"))
-          smtp_user = os.environ["SMTP_USERNAME"]
-          smtp_pass = os.environ["SMTP_PASSWORD"]
-          email_from = os.environ["EMAIL_FROM"]
-          email_to = os.environ["EMAIL_TO"]
+          smtp_server = clean(os.environ["SMTP_SERVER"])
+          smtp_port = int(clean(os.environ.get("SMTP_PORT", "587")))
+          smtp_user = clean(os.environ["SMTP_USERNAME"])
+          smtp_pass = clean(os.environ["SMTP_PASSWORD"])
+          email_from = clean(os.environ["EMAIL_FROM"])
+          email_to = clean(os.environ["EMAIL_TO"])
+          subject = clean(os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report"))
 
-          subject = os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report")
-          body = open(notify_path, "r", encoding="utf-8").read()
+          body = open(path, "r", encoding="utf-8").read()
 
           msg = EmailMessage()
           msg["From"] = email_from
@@ -197,5 +203,5 @@ jobs:
               s.login(smtp_user, smtp_pass)
               s.send_message(msg)
 
-          print(f"✅ Email sent to {email_to}")
+          print("✅ Email sent")
           PY
