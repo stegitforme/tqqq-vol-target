@@ -5,11 +5,10 @@
 
 from __future__ import annotations
 
-import os
+import json
 import pandas as pd
-import numpy as np
-from datetime import datetime
 from pathlib import Path
+from string import Template
 
 # -------------------------
 # Config
@@ -22,22 +21,21 @@ HISTORY_PATH = "logs/history.csv"
 OUTPUT_DIR = Path("output")
 REPORTS_DIR = OUTPUT_DIR / "reports"
 
+# Your GitHub Pages base (update if repo/user changes)
+PAGES_BASE_URL = "https://stegitforme.github.io/tqqq-vol-target"
+
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # -------------------------
-# Helpers
+# Load + clean history
 # -------------------------
-def round_to_step(x: float, step: float) -> float:
-    return round(x / step) * step
-
-
 def load_history_clean(path: str) -> pd.DataFrame:
     """
-    Load history.csv safely:
-      - normalize RunDate
+    Load logs/history.csv:
+      - normalize RunDate to date
       - sort
-      - keep LAST row per date (fixes duplicate runs)
+      - keep LAST row per date (fixes duplicate runs in same day)
     """
     hist = pd.read_csv(path, parse_dates=["RunDate"])
     hist["RunDate"] = pd.to_datetime(hist["RunDate"]).dt.normalize()
@@ -45,168 +43,195 @@ def load_history_clean(path: str) -> pd.DataFrame:
     hist = hist.drop_duplicates(subset=["RunDate"], keep="last").reset_index(drop=True)
     return hist
 
+history = load_history_clean(HISTORY_PATH)
+if history.empty:
+    raise RuntimeError("logs/history.csv is empty")
 
-def compute_prev_curr_alloc(history_path: str):
-    """
-    Returns:
-      prev_alloc (float 0–1)
-      curr_alloc (float 0–1)
-      curr_cash (float 0–1)
-      history_clean (DataFrame)
-    """
-    hist = load_history_clean(history_path)
+latest = history.iloc[-1]
+curr_date = latest["RunDate"]
 
-    if len(hist) == 0:
-        raise RuntimeError("history.csv is empty")
+# Previous allocation = last row strictly BEFORE current date
+prev_rows = history[history["RunDate"] < curr_date]
+if len(prev_rows) > 0:
+    prev_alloc = float(prev_rows.iloc[-1]["AllocTQQQ"])
+else:
+    prev_alloc = float(latest["AllocTQQQ"])  # first run fallback
 
-    curr = hist.iloc[-1]
-    curr_date = curr["RunDate"]
-
-    curr_alloc = float(curr["AllocTQQQ"])
-    curr_cash = float(curr["AllocCash"])
-
-    prev_rows = hist[hist["RunDate"] < curr_date]
-    if len(prev_rows) > 0:
-        prev_alloc = float(prev_rows.iloc[-1]["AllocTQQQ"])
-    else:
-        prev_alloc = curr_alloc  # first run fallback
-
-    return prev_alloc, curr_alloc, curr_cash, hist
-
-
-# -------------------------
-# Load history + allocations
-# -------------------------
-prev_alloc, curr_alloc, cash_alloc, history = compute_prev_curr_alloc(HISTORY_PATH)
+curr_alloc = float(latest["AllocTQQQ"])
+curr_cash  = float(latest["AllocCash"])
 
 prev_alloc_pct = int(round(prev_alloc * 100))
 curr_alloc_pct = int(round(curr_alloc * 100))
-cash_alloc_pct = int(round(cash_alloc * 100))
+curr_cash_pct  = int(round(curr_cash * 100))
 
-latest = history.iloc[-1]
-
-run_date = latest["RunDate"].date()
 close_price = float(latest["Close"])
-realized_vol = float(latest["RealizedVol20d"]) * 100
+realized_vol_pct = float(latest["RealizedVol20d"]) * 100
+
+run_date_str = curr_date.strftime("%Y-%m-%d")
 
 # -------------------------
-# Chart data (last 365 days)
+# Chart data (last 365 points)
 # -------------------------
-chart_df = history.copy()
-chart_df = chart_df.tail(365)
+chart_df = history.tail(365).copy()
 
 chart_dates = chart_df["RunDate"].dt.strftime("%Y-%m-%d").tolist()
-chart_alloc = (chart_df["AllocTQQQ"] * 100).tolist()
-chart_vol = (chart_df["RealizedVol20d"] * 100).tolist()
+chart_alloc = (chart_df["AllocTQQQ"] * 100).round(2).tolist()
+chart_vol   = (chart_df["RealizedVol20d"] * 100).round(2).tolist()
+
+# JSON encode so JS gets valid arrays
+chart_dates_js = json.dumps(chart_dates)
+chart_alloc_js = json.dumps(chart_alloc)
+chart_vol_js   = json.dumps(chart_vol)
 
 # -------------------------
-# HTML Report
+# Report paths + URLs
 # -------------------------
-html = f"""
+report_rel_path = f"reports/{run_date_str}.html"
+report_file = REPORTS_DIR / f"{run_date_str}.html"
+latest_file = OUTPUT_DIR / "weekly_report.html"
+
+report_url = f"{PAGES_BASE_URL}/{report_rel_path}"
+
+# Save helper files for workflow notifications
+(OUTPUT_DIR / "latest_report_path.txt").write_text(report_rel_path, encoding="utf-8")
+(OUTPUT_DIR / "latest_report_url.txt").write_text(report_url, encoding="utf-8")
+
+# Subject + message for Pushover/email
+subject = f"TQQQ Vol Target | {curr_alloc_pct}% TQQQ / {curr_cash_pct}% Cash | Vol20={realized_vol_pct:.1f}%"
+message = (
+    f"{subject}\n"
+    f"Date={run_date_str}\n"
+    f"Report generated.\n"
+)
+
+(OUTPUT_DIR / "subject.txt").write_text(subject, encoding="utf-8")
+(OUTPUT_DIR / "message.txt").write_text(message, encoding="utf-8")
+
+# -------------------------
+# HTML (Template to avoid f-string brace issues)
+# -------------------------
+html_tpl = Template(r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>TQQQ Volatility Target</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-body {{
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #f7f7f8;
-  padding: 24px;
-}}
-.card {{
-  background: white;
-  border-radius: 14px;
-  padding: 20px;
-  margin-bottom: 20px;
-}}
-h1 {{ margin-bottom: 4px; }}
-small {{ color: #666; }}
-table {{
-  width: 100%;
-  border-collapse: collapse;
-}}
-td {{
-  padding: 6px 0;
-}}
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#f7f7f8; margin:0; padding:24px; }
+  h1 { margin:0 0 6px 0; font-size: 40px; }
+  .sub { color:#666; margin-bottom:18px; }
+  .pill { display:inline-block; background:#eef2ff; color:#111; padding:10px 14px; border-radius:999px; font-size:14px; margin:10px 0 18px 0; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:18px; }
+  .card { background:white; border-radius:18px; padding:20px; box-shadow: 0 8px 22px rgba(0,0,0,0.05); }
+  .card h2 { margin:0 0 10px 0; font-size:28px; }
+  table { width:100%; border-collapse:collapse; }
+  td { padding:10px 0; border-bottom:1px solid #eee; font-size:18px; }
+  td:last-child { text-align:right; font-weight:600; }
+  .muted { color:#777; font-weight:500; }
+  .big { font-weight:800; }
+  .wide { grid-column: 1 / -1; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 
-<h1>TQQQ Volatility Target</h1>
-<small>Target Vol = 20% • Lookback = 20 days • Rounding = 5%</small>
+  <h1>TQQQ Volatility Target</h1>
+  <div class="sub">Weekly sizing based on realized volatility</div>
+  <div class="pill">Target Vol = 20% • Lookback = 20 days • Rounding = 5%</div>
 
-<div class="card">
-<h2>This week</h2>
-<table>
-<tr><td>Date</td><td>{run_date}</td></tr>
-<tr><td>TQQQ Close</td><td>${close_price:.2f}</td></tr>
-<tr><td>Realized Vol (20d)</td><td>{realized_vol:.1f}%</td></tr>
-<tr><td><b>Previous Allocation</b></td><td><b>{prev_alloc_pct}% TQQQ</b></td></tr>
-<tr><td><b>Current Allocation</b></td><td><b>{curr_alloc_pct}% TQQQ</b></td></tr>
-<tr><td>Cash / BIL</td><td>{cash_alloc_pct}%</td></tr>
-</table>
-</div>
+  <div class="grid">
+    <div class="card">
+      <h2>This week</h2>
+      <table>
+        <tr><td class="muted">Date</td><td>$RUN_DATE</td></tr>
+        <tr><td class="muted">TQQQ Close</td><td>$$CLOSE</td></tr>
+        <tr><td class="muted">Realized Vol (20d)</td><td>$VOL%</td></tr>
+        <tr><td class="big">Previous Allocation</td><td class="big">$PREV% TQQQ</td></tr>
+        <tr><td class="big">Current Allocation</td><td class="big">$CURR% TQQQ</td></tr>
+        <tr><td class="muted">Cash / BIL</td><td>$CASH%</td></tr>
+      </table>
+    </div>
 
-<div class="card">
-<h2>Last 365 days trend</h2>
-<canvas id="chart"></canvas>
-</div>
+    <div class="card">
+      <h2>How it works</h2>
+      <div style="font-size:18px; line-height:1.5;">
+        <ul>
+          <li>Compute 20-day realized volatility (annualized) from daily closes.</li>
+          <li>Allocation ≈ TargetVol ÷ RealizedVol (clamped 0–100%).</li>
+          <li>Round to 5% steps to reduce churn.</li>
+          <li>Run after Friday close; execute Monday after the open.</li>
+          <li>"Cash" sleeve can be BIL/SGOV (or your preferred T-bill ETF).</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card wide">
+      <h2>Last 365 days trend (allocation + vol)</h2>
+      <canvas id="chart"></canvas>
+      <div style="margin-top:10px; color:#777;">Data comes from logs/history.csv (updated each run). Allocation is rounded to 5% steps.</div>
+    </div>
+  </div>
 
 <script>
-const ctx = document.getElementById("chart");
-new Chart(ctx, {{
-  type: "line",
-  data: {{
-    labels: {chart_dates},
-    datasets: [
-      {{
-        label: "TQQQ Allocation (%)",
-        data: {chart_alloc},
-        borderColor: "#4f83ff",
-        yAxisID: "y",
-        tension: 0.3
-      }},
-      {{
-        label: "Realized Vol 20d (%)",
-        data: {chart_vol},
-        borderColor: "#ff6b81",
-        yAxisID: "y1",
-        tension: 0.3
-      }}
-    ]
-  }},
-  options: {{
-    responsive: true,
-    scales: {{
-      y: {{
-        position: "left",
-        min: 0,
-        max: 100
-      }},
-      y1: {{
-        position: "right",
-        min: 0,
-        max: 60,
-        grid: {{ drawOnChartArea: false }}
-      }}
-    }}
-  }}
-});
+  const labels = $CHART_DATES;
+  const alloc = $CHART_ALLOC;
+  const vol   = $CHART_VOL;
+
+  const ctx = document.getElementById("chart");
+  new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "TQQQ Allocation (%)",
+          data: alloc,
+          borderColor: "#4f83ff",
+          tension: 0.25,
+          yAxisID: "y",
+        },
+        {
+          label: "Realized Vol 20d (%)",
+          data: vol,
+          borderColor: "#ff6b81",
+          tension: 0.25,
+          yAxisID: "y1",
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        y: { position: "left", min: 0, max: 100, title: { display: true, text: "Allocation (%)" } },
+        y1: { position: "right", min: 0, max: 60, grid: { drawOnChartArea: false }, title: { display: true, text: "Realized Vol (%)" } }
+      }
+    }
+  });
 </script>
 
 </body>
 </html>
-"""
+""")
 
-# -------------------------
-# Write files
-# -------------------------
-dated_report = REPORTS_DIR / f"{run_date}.html"
-latest_report = OUTPUT_DIR / "weekly_report.html"
+html = html_tpl.substitute(
+    RUN_DATE=run_date_str,
+    CLOSE=f"{close_price:.2f}",
+    VOL=f"{realized_vol_pct:.1f}",
+    PREV=str(prev_alloc_pct),
+    CURR=str(curr_alloc_pct),
+    CASH=str(curr_cash_pct),
+    CHART_DATES=chart_dates_js,
+    CHART_ALLOC=chart_alloc_js,
+    CHART_VOL=chart_vol_js,
+)
 
-dated_report.write_text(html, encoding="utf-8")
-latest_report.write_text(html, encoding="utf-8")
+# Write dated + latest
+report_file.write_text(html, encoding="utf-8")
+latest_file.write_text(html, encoding="utf-8")
 
-print(f"Report written: {dated_report}")
+print(f"✅ Wrote dated report: {report_file}")
+print(f"✅ Wrote latest report: {latest_file}")
+print(f"✅ Latest report URL: {report_url}")
