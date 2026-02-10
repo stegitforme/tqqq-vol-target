@@ -1,3 +1,3 @@
-TQQQ Vol Target | 35% TQQQ / 65% Cash | Vol20=53.5%
-Date=2026-02-06
+TQQQ Vol Target | 40% TQQQ / 60% Cash | Vol20=53.0%
+Date=2026-02-09
 Report generated.
