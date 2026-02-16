@@ -1,225 +1,337 @@
-name: Friday TQQQ Vol Report
+#!/usr/bin/env python3
+from __future__ import annotations
 
-on:
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: "Run mode"
-        required: false
-        default: "debug"
-        type: choice
-        options:
-          - debug
-          - official
-  schedule:
-    # Friday after market close (6:10pm ET ≈ 23:10 UTC)
-    - cron: "10 23 * * 5"
+import json
+import math
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from string import Template
 
-permissions:
-  contents: write
-  pages: write
-  id-token: write
+import pandas as pd
 
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
+# =========================
+# CONFIG
+# =========================
+TARGET_VOL = 0.20         # 20% target
+LOOKBACK_DAYS = 20
+ROUND_STEP = 0.05         # 5% steps
+TRADING_DAYS = 252
 
-jobs:
-  run-report:
-    runs-on: ubuntu-latest
+HISTORY_DAYS = 365
 
-    steps:
-      # -----------------------------
-      # Checkout
-      # -----------------------------
-      - name: Checkout repo
-        uses: actions/checkout@v4
+BASE = Path(__file__).resolve().parent
+DATA_DIR = BASE / "data"
+LOG_DIR = BASE / "logs"
+OUTPUT_DIR = BASE / "output"
+REPORTS_DIR = OUTPUT_DIR / "reports"
+DEBUG_REPORTS_DIR = REPORTS_DIR / "debug"
 
-      # -----------------------------
-      # Decide run mode
-      # -----------------------------
-      - name: Decide run mode
-        id: mode
-        run: |
-          set -e
+PRICE_FILE = DATA_DIR / "TQQQ.csv"
 
-          EVENT="${{ github.event_name }}"
-          INPUT_MODE="${{ github.event.inputs.mode }}"
-          TODAY_UTC=$(date -u +%u)
+HISTORY_OFFICIAL = LOG_DIR / "history_official.csv"
+HISTORY_DEBUG = LOG_DIR / "history_debug.csv"
 
-          # Defaults:
-          # - schedule => official
-          # - workflow_dispatch => debug unless user chooses official
-          if [ "$EVENT" = "schedule" ]; then
-            MODE="official"
-          else
-            MODE="${INPUT_MODE:-debug}"
-          fi
+# GitHub Pages base (update if repo/user changes)
+PAGES_BASE_URL = "https://stegitforme.github.io/tqqq-vol-target"
 
-          if [ "$MODE" = "debug" ]; then
-            echo "DEBUG_RUN=1" >> $GITHUB_ENV
-          else
-            echo "DEBUG_RUN=0" >> $GITHUB_ENV
-          fi
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+DEBUG_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-          echo "MODE=$MODE" >> $GITHUB_ENV
-          echo "Run mode: $MODE (event=$EVENT, utc_day=$TODAY_UTC)"
-          if [ "$MODE" = "official" ] && [ "$TODAY_UTC" != "5" ]; then
-            echo "⚠️ NOTE: Running OFFICIAL manually on a non-Friday UTC day. This is allowed (manual override)."
-          fi
+# =========================
+# HELPERS
+# =========================
+def utc_now_str() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-      # -----------------------------
-      # Python
-      # -----------------------------
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+def realized_vol_annual(close: pd.Series, window: int) -> float:
+    rets = close.pct_change().dropna()
+    # ddof=0 to be stable across environments; change to ddof=1 if you prefer sample std
+    vol_daily = rets.rolling(window).std(ddof=0).iloc[-1]
+    return float(vol_daily) * math.sqrt(TRADING_DAYS)
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+def round_to_step(x: float, step: float) -> float:
+    # round to nearest step
+    return round(x / step) * step
 
-      # -----------------------------
-      # Generate report
-      # -----------------------------
-      - name: Run weekly report
-        run: |
-          python fetch_tqqq.py
-          python weekly_report.py
+def clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
+    return max(lo, min(hi, x))
 
-      # -----------------------------
-      # Commit data + report
-      # -----------------------------
-      - name: Commit updated data + report
-        run: |
-          set -e
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+def load_history(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame(columns=["RunDate", "Close", "RealizedVol20d", "TargetVol", "AllocTQQQ", "AllocCash"])
+    df = pd.read_csv(path, parse_dates=["RunDate"])
+    df["RunDate"] = pd.to_datetime(df["RunDate"]).dt.normalize()
+    df = df.sort_values("RunDate").reset_index(drop=True)
+    # keep last row per day (in case re-run same day)
+    df = df.drop_duplicates(subset=["RunDate"], keep="last").reset_index(drop=True)
+    return df
 
-          # Always commit outputs + history + reports
-          # (weekly_report.py writes output/weekly_report.html + output/reports/YYYY-MM-DD.html + logs/history.csv)
-          git add output/ logs/history.csv || true
-          git add output/reports/ || true
-          git add data/ || true
+def write_history(path: Path, df: pd.DataFrame) -> None:
+    out = df.copy()
+    out["RunDate"] = pd.to_datetime(out["RunDate"]).dt.date.astype(str)
+    out.to_csv(path, index=False)
 
-          if [ "${DEBUG_RUN}" = "1" ]; then
-            git commit -m "Debug TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
-          else
-            git commit -m "OFFICIAL TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
-          fi
+def append_history_row(hist_path: Path, run_date: pd.Timestamp, close: float, vol20: float, alloc: float) -> pd.DataFrame:
+    hist = load_history(hist_path)
 
-          git push
+    row = {
+        "RunDate": pd.to_datetime(run_date).normalize(),
+        "Close": float(close),
+        "RealizedVol20d": float(vol20),
+        "TargetVol": float(TARGET_VOL),
+        "AllocTQQQ": float(alloc),
+        "AllocCash": float(1.0 - alloc),
+    }
 
-      # -----------------------------
-      # GitHub Pages
-      # -----------------------------
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: output
+    hist = pd.concat([hist, pd.DataFrame([row])], ignore_index=True)
 
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
+    hist["RunDate"] = pd.to_datetime(hist["RunDate"]).dt.normalize()
+    hist = hist.sort_values("RunDate")
+    hist = hist.drop_duplicates(subset=["RunDate"], keep="last").reset_index(drop=True)
 
-      # -----------------------------
-      # Prepare notification text
-      # -----------------------------
-      - name: Prepare notification text
-        run: |
-          set -e
+    # trim to last HISTORY_DAYS (timezone-naive to avoid tz compare bugs)
+    cutoff = pd.Timestamp.utcnow().normalize().tz_localize(None) - pd.Timedelta(days=HISTORY_DAYS)
+    hist["RunDate"] = pd.to_datetime(hist["RunDate"]).dt.tz_localize(None)
+    hist = hist[hist["RunDate"] >= cutoff].reset_index(drop=True)
 
-          REPORT_URL="$(cat output/latest_report_url.txt 2>/dev/null || true)"
-          SUBJECT="$(cat output/subject.txt 2>/dev/null || echo 'TQQQ Vol Target Weekly Report')"
-          MESSAGE="$(cat output/message.txt 2>/dev/null || echo 'Report generated.')"
+    write_history(hist_path, hist)
+    return hist
 
-          {
-            echo "$MESSAGE"
-            echo ""
-            echo "Open live report:"
-            echo "$REPORT_URL"
-            echo ""
-            echo "Run:"
-            echo "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          } > /tmp/notify_body.txt
+def fmt_pct(x: float) -> str:
+    return f"{x:.1f}%"
 
-          echo "REPORT_URL=$REPORT_URL" >> $GITHUB_ENV
-          echo "SUBJECT=$SUBJECT" >> $GITHUB_ENV
+# =========================
+# MAIN
+# =========================
+def main() -> None:
+    # DEBUG_RUN comes from workflow ("Decide run mode")
+    debug_run = os.environ.get("DEBUG_RUN", "0") == "1"
+    mode = os.environ.get("MODE", "debug" if debug_run else "official")
 
-      # -----------------------------
-      # Push notification (Pushover)
-      # -----------------------------
-      - name: Send Pushover notification
-        if: always()
-        env:
-          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
-          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
-        run: |
-          if [ -z "${PUSHOVER_USER_KEY:-}" ] || [ -z "${PUSHOVER_API_TOKEN:-}" ]; then
-            echo "Skipping Pushover (missing secrets)"
-            exit 0
-          fi
+    if not PRICE_FILE.exists():
+        raise FileNotFoundError(f"Missing {PRICE_FILE}. Did fetch_tqqq.py run?")
 
-          curl -s \
-            --form-string "token=$PUSHOVER_API_TOKEN" \
-            --form-string "user=$PUSHOVER_USER_KEY" \
-            --form-string "title=$SUBJECT" \
-            --form-string "message=$(cat /tmp/notify_body.txt)" \
-            --form-string "url=$REPORT_URL" \
-            --form-string "url_title=Open live report" \
-            https://api.pushover.net/1/messages.json
+    px = pd.read_csv(PRICE_FILE, parse_dates=["Date"]).sort_values("Date")
+    if "Close" not in px.columns:
+        raise RuntimeError(f"{PRICE_FILE} must have a Close column")
 
-      # -----------------------------
-      # Email (SMTP)
-      # -----------------------------
-      - name: Send email (SMTP)
-        if: always()
-        env:
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-        run: |
-          python - << 'PY'
-          import os, smtplib
-          from email.message import EmailMessage
+    px = px.set_index("Date")
+    close = px["Close"].astype(float)
 
-          path = "/tmp/notify_body.txt"
-          if not os.path.exists(path):
-              print("Skipping email (no body)")
-              raise SystemExit(0)
+    if len(close) < LOOKBACK_DAYS + 5:
+        raise RuntimeError(f"Not enough rows to compute {LOOKBACK_DAYS}d vol")
 
-          def clean(s: str) -> str:
-              return (s or "").replace("\u00a0", " ").strip()
+    # Use last available close date as the run date
+    run_date = pd.to_datetime(close.index[-1]).normalize()
+    last_close = float(close.iloc[-1])
 
-          smtp_server = clean(os.environ.get("SMTP_SERVER", ""))
-          smtp_port = int(clean(os.environ.get("SMTP_PORT", "587")) or "587")
-          smtp_user = clean(os.environ.get("SMTP_USERNAME", ""))
-          smtp_pass = clean(os.environ.get("SMTP_PASSWORD", ""))
-          email_from = clean(os.environ.get("EMAIL_FROM", ""))
-          email_to = clean(os.environ.get("EMAIL_TO", ""))
-          subject = clean(os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report"))
+    # compute realized vol
+    vol20 = realized_vol_annual(close, LOOKBACK_DAYS)
 
-          if not smtp_server or not smtp_user or not smtp_pass or not email_from or not email_to:
-              print("Skipping email (missing SMTP secrets)")
-              raise SystemExit(0)
+    # compute allocation
+    raw_alloc = (TARGET_VOL / vol20) if vol20 > 0 else 1.0
+    alloc = clamp(raw_alloc, 0.0, 1.0)
+    alloc = round_to_step(alloc, ROUND_STEP)
+    alloc = clamp(alloc, 0.0, 1.0)
 
-          body = open(path, "r", encoding="utf-8").read()
+    # Append to correct history file(s)
+    if debug_run:
+        hist = append_history_row(HISTORY_DEBUG, run_date, last_close, vol20, alloc)
+    else:
+        hist = append_history_row(HISTORY_OFFICIAL, run_date, last_close, vol20, alloc)
 
-          msg = EmailMessage()
-          msg["From"] = email_from
-          msg["To"] = email_to
-          msg["Subject"] = subject
-          msg.set_content(body, charset="utf-8")
+    if hist.empty:
+        raise RuntimeError("History is empty after append (unexpected)")
 
-          with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as s:
-              s.ehlo()
-              s.starttls()
-              s.login(smtp_user, smtp_pass)
-              s.send_message(msg)
+    # Previous allocation = last row strictly before current run_date
+    hist["RunDate"] = pd.to_datetime(hist["RunDate"]).dt.normalize()
+    prev_rows = hist[hist["RunDate"] < run_date]
+    if len(prev_rows) > 0:
+        prev_alloc = float(prev_rows.iloc[-1]["AllocTQQQ"])
+    else:
+        prev_alloc = float(hist.iloc[-1]["AllocTQQQ"])
 
-          print("✅ Email sent")
-          PY
+    prev_alloc_pct = int(round(prev_alloc * 100))
+    curr_alloc_pct = int(round(alloc * 100))
+    curr_cash_pct = 100 - curr_alloc_pct
+    realized_vol_pct = float(vol20) * 100
+
+    run_date_str = run_date.strftime("%Y-%m-%d")
+
+    # Chart data (last 365 points)
+    chart_df = hist.tail(365).copy()
+    chart_dates = pd.to_datetime(chart_df["RunDate"]).dt.strftime("%Y-%m-%d").tolist()
+    chart_alloc = (chart_df["AllocTQQQ"] * 100).round(2).tolist()
+    chart_vol = (chart_df["RealizedVol20d"] * 100).round(2).tolist()
+
+    chart_dates_js = json.dumps(chart_dates)
+    chart_alloc_js = json.dumps(chart_alloc)
+    chart_vol_js = json.dumps(chart_vol)
+
+    # Report paths
+    if debug_run:
+        # avoid overwriting the official dated page
+        # include time so multiple debug runs don't collide
+        tstamp = datetime.now(timezone.utc).strftime("%H%M")
+        report_rel_path = f"reports/debug/{run_date_str}_{tstamp}.html"
+        report_file = DEBUG_REPORTS_DIR / f"{run_date_str}_{tstamp}.html"
+        latest_file = OUTPUT_DIR / "debug_report.html"
+    else:
+        report_rel_path = f"reports/{run_date_str}.html"
+        report_file = REPORTS_DIR / f"{run_date_str}.html"
+        latest_file = OUTPUT_DIR / "weekly_report.html"
+
+    report_url = f"{PAGES_BASE_URL}/{report_rel_path}"
+
+    # Save helper files for workflow notifications
+    (OUTPUT_DIR / "latest_report_path.txt").write_text(report_rel_path, encoding="utf-8")
+    (OUTPUT_DIR / "latest_report_url.txt").write_text(report_url, encoding="utf-8")
+
+    # Subject + message for Pushover/email
+    subject = f"TQQQ Vol Target | {curr_alloc_pct}% TQQQ / {curr_cash_pct}% Cash | Vol20={realized_vol_pct:.1f}%"
+    message = (
+        f"{subject}\n"
+        f"Mode={mode}\n"
+        f"Date={run_date_str}\n"
+        f"Prev={prev_alloc_pct}%  Curr={curr_alloc_pct}%\n"
+    )
+
+    (OUTPUT_DIR / "subject.txt").write_text(subject, encoding="utf-8")
+    (OUTPUT_DIR / "message.txt").write_text(message, encoding="utf-8")
+
+    # HTML template
+    html_tpl = Template(r"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>TQQQ Volatility Target</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#f7f7f8; margin:0; padding:24px; }
+  h1 { margin:0 0 6px 0; font-size: 40px; }
+  .sub { color:#666; margin-bottom:18px; }
+  .pill { display:inline-block; background:#eef2ff; color:#111; padding:10px 14px; border-radius:999px; font-size:14px; margin:10px 0 18px 0; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:18px; }
+  .card { background:white; border-radius:18px; padding:20px; box-shadow: 0 8px 22px rgba(0,0,0,0.05); }
+  .card h2 { margin:0 0 10px 0; font-size:28px; }
+  table { width:100%; border-collapse:collapse; }
+  td { padding:10px 0; border-bottom:1px solid #eee; font-size:18px; }
+  td:last-child { text-align:right; font-weight:600; }
+  .muted { color:#777; font-weight:500; }
+  .big { font-weight:800; }
+  .wide { grid-column: 1 / -1; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+  <h1>TQQQ Volatility Target</h1>
+  <div class="sub">Weekly sizing based on realized volatility</div>
+  <div class="pill">Target Vol = 20% • Lookback = 20 days • Rounding = 5% • Mode = $MODE</div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>This week</h2>
+      <table>
+        <tr><td class="muted">Date</td><td>$RUN_DATE</td></tr>
+        <tr><td class="muted">TQQQ Close</td><td>$$CLOSE</td></tr>
+        <tr><td class="muted">Realized Vol (20d)</td><td>$VOL%</td></tr>
+        <tr><td class="big">Previous Allocation</td><td class="big">$PREV% TQQQ</td></tr>
+        <tr><td class="big">Current Allocation</td><td class="big">$CURR% TQQQ</td></tr>
+        <tr><td class="muted">Cash / BIL</td><td>$CASH%</td></tr>
+      </table>
+      <div class="muted" style="margin-top:10px;">Generated: $GEN_TIME</div>
+    </div>
+
+    <div class="card">
+      <h2>How it works</h2>
+      <div style="font-size:18px; line-height:1.5;">
+        <ul>
+          <li>Compute 20-day realized volatility (annualized) from daily closes.</li>
+          <li>Allocation ≈ TargetVol ÷ RealizedVol (clamped 0–100%).</li>
+          <li>Round to 5% steps to reduce churn.</li>
+          <li>Run after Friday close; execute Monday after the open.</li>
+          <li>"Cash" sleeve can be BIL/SGOV (or your preferred T-bill ETF).</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card wide">
+      <h2>Last 365 days trend (allocation + vol)</h2>
+      <canvas id="chart"></canvas>
+      <div style="margin-top:10px; color:#777;">Data comes from logs/history_official.csv (official) or logs/history_debug.csv (debug).</div>
+    </div>
+  </div>
+
+<script>
+  const labels = $CHART_DATES;
+  const alloc = $CHART_ALLOC;
+  const vol   = $CHART_VOL;
+
+  const ctx = document.getElementById("chart");
+  new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "TQQQ Allocation (%)",
+          data: alloc,
+          borderColor: "#4f83ff",
+          tension: 0.25,
+          yAxisID: "y",
+        },
+        {
+          label: "Realized Vol 20d (%)",
+          data: vol,
+          borderColor: "#ff6b81",
+          tension: 0.25,
+          yAxisID: "y1",
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        y: { position: "left", min: 0, max: 100, title: { display: true, text: "Allocation (%)" } },
+        y1: { position: "right", min: 0, max: 80, grid: { drawOnChartArea: false }, title: { display: true, text: "Realized Vol (%)" } }
+      }
+    }
+  });
+</script>
+
+</body>
+</html>
+""")
+
+    html = html_tpl.substitute(
+        MODE=mode,
+        RUN_DATE=run_date_str,
+        CLOSE=f"{last_close:.2f}",
+        VOL=f"{realized_vol_pct:.1f}",
+        PREV=str(prev_alloc_pct),
+        CURR=str(curr_alloc_pct),
+        CASH=str(curr_cash_pct),
+        GEN_TIME=utc_now_str(),
+        CHART_DATES=chart_dates_js,
+        CHART_ALLOC=chart_alloc_js,
+        CHART_VOL=chart_vol_js,
+    )
+
+    report_file.write_text(html, encoding="utf-8")
+    latest_file.write_text(html, encoding="utf-8")
+
+    print(f"✅ Mode={mode} DEBUG_RUN={int(debug_run)}")
+    print(f"✅ Appended history: {'logs/history_debug.csv' if debug_run else 'logs/history_official.csv'}")
+    print(f"✅ Wrote dated report: {report_file}")
+    print(f"✅ Wrote latest file: {latest_file}")
+    print(f"✅ Latest report URL: {report_url}")
+
+if __name__ == "__main__":
+    main()
