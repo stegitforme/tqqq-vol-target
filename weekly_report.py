@@ -1,6 +1,6 @@
 # weekly_report.py
 # =========================
-# TQQQ Volatility Target
+# TQQQ Volatility Target (with ASOF_DATE support)
 # =========================
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ import pandas as pd
 from pathlib import Path
 from string import Template
 
-
 # -------------------------
 # Config
 # -------------------------
@@ -20,7 +19,7 @@ LOOKBACK_DAYS = 20
 ROUND_STEP = 0.05
 
 HISTORY_PATH = "logs/history.csv"
-OFFICIAL_HISTORY_PATH = "logs/history_official.csv"
+HISTORY_OFFICIAL_PATH = "logs/history_official.csv"
 
 OUTPUT_DIR = Path("output")
 REPORTS_DIR = OUTPUT_DIR / "reports"
@@ -30,17 +29,14 @@ PAGES_BASE_URL = "https://stegitforme.github.io/tqqq-vol-target"
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-Path("logs").mkdir(parents=True, exist_ok=True)
-
-RUN_MODE = os.environ.get("RUN_MODE", "debug").lower().strip()  # "official" or "debug"
-
 
 # -------------------------
 # Helpers
 # -------------------------
 def load_history_clean(path: str) -> pd.DataFrame:
     """
-    Load logs/history.csv:
+    Load a history CSV:
+      - parse RunDate
       - normalize RunDate to date
       - sort
       - keep LAST row per date (fixes duplicate runs in same day)
@@ -49,104 +45,101 @@ def load_history_clean(path: str) -> pd.DataFrame:
     if not p.exists():
         return pd.DataFrame()
 
-    hist = pd.read_csv(p, parse_dates=["RunDate"])
-    if hist.empty:
-        return hist
+    df = pd.read_csv(p, parse_dates=["RunDate"])
+    if df.empty:
+        return df
 
-    hist["RunDate"] = pd.to_datetime(hist["RunDate"]).dt.normalize()
-    hist = hist.sort_values("RunDate")
-    hist = hist.drop_duplicates(subset=["RunDate"], keep="last").reset_index(drop=True)
-    return hist
+    df["RunDate"] = pd.to_datetime(df["RunDate"]).dt.normalize()
+    df = df.sort_values("RunDate")
+    df = df.drop_duplicates(subset=["RunDate"], keep="last").reset_index(drop=True)
+    return df
 
 
-def ensure_official_history_synced(full_hist: pd.DataFrame, official_path: str) -> pd.DataFrame:
+def pick_asof_row(history: pd.DataFrame, asof_date: pd.Timestamp | None) -> pd.Series:
     """
-    Ensure logs/history_official.csv exists and is a subset of full history.
-    We treat an "official" run as one where RUN_MODE == "official" for THAT run.
-    This function doesn't guess Fridays; it just loads what exists.
+    If asof_date is provided, pick the last row with RunDate <= asof_date.
+    Otherwise pick the last row.
     """
-    p = Path(official_path)
-    if not p.exists():
-        # Create empty official file with correct columns
-        cols = ["RunDate", "Close", "RealizedVol20d", "TargetVol", "AllocTQQQ", "AllocCash"]
-        pd.DataFrame(columns=cols).to_csv(p, index=False)
+    if history.empty:
+        raise RuntimeError("logs/history.csv is empty or missing")
 
-    off = load_history_clean(official_path)
-    return off
+    if asof_date is None:
+        return history.iloc[-1]
+
+    eligible = history[history["RunDate"] <= asof_date]
+    if eligible.empty:
+        raise RuntimeError(
+            f"ASOF_DATE={asof_date.date()} but history has no RunDate <= that date"
+        )
+    return eligible.iloc[-1]
 
 
-def append_official_row(latest_row: pd.Series, official_path: str) -> None:
-    """
-    Append the latest row to logs/history_official.csv (official-only),
-    keeping one row per date.
-    """
-    p = Path(official_path)
-
-    cols = ["RunDate", "Close", "RealizedVol20d", "TargetVol", "AllocTQQQ", "AllocCash"]
-    row = {c: latest_row[c] for c in cols}
-
-    # Load existing, append, de-dupe by date
-    off = load_history_clean(official_path)
-    new = pd.DataFrame([row])
-    new["RunDate"] = pd.to_datetime(new["RunDate"]).dt.normalize()
-
-    if off is None or off.empty:
-        out = new
-    else:
-        out = pd.concat([off, new], ignore_index=True)
-        out["RunDate"] = pd.to_datetime(out["RunDate"]).dt.normalize()
-        out = out.sort_values("RunDate")
-        out = out.drop_duplicates(subset=["RunDate"], keep="last").reset_index(drop=True)
-
-    out.to_csv(p, index=False)
+def pct(x: float) -> int:
+    return int(round(float(x) * 100))
 
 
 # -------------------------
-# Load history (full)
+# Read environment (ASOF_DATE + DEBUG_RUN)
+# -------------------------
+asof_raw = (os.environ.get("ASOF_DATE") or "").strip()
+asof_date = None
+if asof_raw:
+    # Accept YYYY-MM-DD
+    asof_date = pd.to_datetime(asof_raw).normalize()
+
+debug_run = (os.environ.get("DEBUG_RUN") or "0").strip() == "1"
+run_mode = "debug" if debug_run else "official"
+
+# -------------------------
+# Load histories
 # -------------------------
 history = load_history_clean(HISTORY_PATH)
-if history is None or history.empty:
-    raise RuntimeError("logs/history.csv is empty")
+official_hist = load_history_clean(HISTORY_OFFICIAL_PATH)
 
-latest = history.iloc[-1]
+# -------------------------
+# Choose the row for "this week"
+# -------------------------
+latest = pick_asof_row(history, asof_date)
 curr_date = pd.to_datetime(latest["RunDate"]).normalize()
 
-# -------------------------
-# Official history (for “Previous Allocation”)
-# -------------------------
-official_hist = ensure_official_history_synced(history, OFFICIAL_HISTORY_PATH)
+# This is the actual row date we used
+print(f"ASOF_DATE={asof_raw or '(none)'} | using row date={curr_date.date()} | mode={run_mode}")
 
-# If this run is OFFICIAL, append to official history NOW (so Friday shows continuity next week)
-if RUN_MODE == "official":
-    append_official_row(latest, OFFICIAL_HISTORY_PATH)
-    official_hist = load_history_clean(OFFICIAL_HISTORY_PATH)
-
-# Previous allocation should come from last OFFICIAL row strictly before current date
-prev_alloc = None
-if official_hist is not None and not official_hist.empty:
-    prev_off = official_hist[official_hist["RunDate"] < curr_date]
-    if len(prev_off) > 0:
-        prev_alloc = float(prev_off.iloc[-1]["AllocTQQQ"])
-
-# Fallback if no official history yet (first week)
-if prev_alloc is None:
-    prev_alloc = float(latest["AllocTQQQ"])
-
-# Current allocation always from latest full history row
+# Current alloc
 curr_alloc = float(latest["AllocTQQQ"])
 curr_cash = float(latest["AllocCash"])
 
-prev_alloc_pct = int(round(prev_alloc * 100))
-curr_alloc_pct = int(round(curr_alloc * 100))
-curr_cash_pct = int(round(curr_cash * 100))
+curr_alloc_pct = pct(curr_alloc)
+curr_cash_pct = pct(curr_cash)
 
 close_price = float(latest["Close"])
 realized_vol_pct = float(latest["RealizedVol20d"]) * 100
-
 run_date_str = curr_date.strftime("%Y-%m-%d")
 
 # -------------------------
-# Chart data (last 365 points from FULL history)
+# Previous allocation logic
+# -------------------------
+# We want "Previous Allocation (official)" to come from official history if present.
+# If official history is missing/empty, fall back to "previous row in full history".
+prev_alloc_official = None
+
+if not official_hist.empty:
+    prev_off_rows = official_hist[official_hist["RunDate"] < curr_date]
+    if not prev_off_rows.empty:
+        prev_alloc_official = float(prev_off_rows.iloc[-1]["AllocTQQQ"])
+
+if prev_alloc_official is None:
+    # fallback: use full history prior row
+    prev_rows = history[history["RunDate"] < curr_date]
+    if not prev_rows.empty:
+        prev_alloc_official = float(prev_rows.iloc[-1]["AllocTQQQ"])
+    else:
+        prev_alloc_official = curr_alloc
+
+prev_alloc_pct = pct(prev_alloc_official)
+
+# -------------------------
+# Chart data (last 365 points)
 # -------------------------
 chart_df = history.tail(365).copy()
 chart_dates = chart_df["RunDate"].dt.strftime("%Y-%m-%d").tolist()
@@ -170,14 +163,15 @@ report_url = f"{PAGES_BASE_URL}/{report_rel_path}"
 (OUTPUT_DIR / "latest_report_path.txt").write_text(report_rel_path, encoding="utf-8")
 (OUTPUT_DIR / "latest_report_url.txt").write_text(report_url, encoding="utf-8")
 
-# Subject + message
+# Subject + message for Pushover/email
 subject = f"TQQQ Vol Target | {curr_alloc_pct}% TQQQ / {curr_cash_pct}% Cash | Vol20={realized_vol_pct:.1f}%"
 message = (
     f"{subject}\n"
     f"Date={run_date_str}\n"
-    f"Mode={RUN_MODE}\n"
+    f"Mode={run_mode}\n"
+    f"{'ASOF_DATE=' + asof_raw if asof_raw else ''}\n"
     f"Report generated.\n"
-)
+).strip() + "\n"
 
 (OUTPUT_DIR / "subject.txt").write_text(subject, encoding="utf-8")
 (OUTPUT_DIR / "message.txt").write_text(message, encoding="utf-8")
@@ -214,7 +208,7 @@ html_tpl = Template(r"""
 
   <h1>TQQQ Volatility Target</h1>
   <div class="sub">Weekly sizing based on realized volatility</div>
-  <div class="pill">Target Vol = 20% • Lookback = 20 days • Rounding = 5% • Mode = $MODE</div>
+  <div class="pill">Target Vol = 20% • Lookback = 20 days • Rounding = 5% • Mode = $MODE$ASOF_PILL</div>
 
   <div class="grid">
     <div class="card">
@@ -245,7 +239,10 @@ html_tpl = Template(r"""
     <div class="card wide">
       <h2>Last 365 days trend (allocation + vol)</h2>
       <canvas id="chart"></canvas>
-      <div style="margin-top:10px; color:#777;">Data comes from logs/history.csv (full log). “Previous Allocation” comes from logs/history_official.csv.</div>
+      <div style="margin-top:10px; color:#777;">
+        Data comes from logs/history.csv (full log).
+        “Previous Allocation (official)” comes from logs/history_official.csv.
+      </div>
     </div>
   </div>
 
@@ -268,7 +265,7 @@ html_tpl = Template(r"""
       responsive: true,
       interaction: { mode: "index", intersect: false },
       scales: {
-        y: { position: "left", min: 0, max: 100, title: { display: true, text: "Allocation (%)" } },
+        y:  { position: "left",  min: 0, max: 100, title: { display: true, text: "Allocation (%)" } },
         y1: { position: "right", min: 0, max: 60, grid: { drawOnChartArea: false }, title: { display: true, text: "Realized Vol (%)" } }
       }
     }
@@ -279,8 +276,13 @@ html_tpl = Template(r"""
 </html>
 """)
 
+asof_pill = ""
+if asof_raw:
+    asof_pill = f" • ASOF_DATE = {asof_raw}"
+
 html = html_tpl.substitute(
-    MODE=RUN_MODE,
+    MODE=run_mode,
+    ASOF_PILL=asof_pill,
     RUN_DATE=run_date_str,
     CLOSE=f"{close_price:.2f}",
     VOL=f"{realized_vol_pct:.1f}",
@@ -292,11 +294,10 @@ html = html_tpl.substitute(
     CHART_VOL=chart_vol_js,
 )
 
+# Write dated + latest
 report_file.write_text(html, encoding="utf-8")
 latest_file.write_text(html, encoding="utf-8")
 
-print(f"✅ Mode: {RUN_MODE}")
 print(f"✅ Wrote dated report: {report_file}")
 print(f"✅ Wrote latest report: {latest_file}")
 print(f"✅ Latest report URL: {report_url}")
-print(f"✅ Previous Allocation (official): {prev_alloc_pct}%")
