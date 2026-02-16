@@ -53,7 +53,7 @@ jobs:
           ASOF_INPUT="${{ github.event.inputs.asof }}"
           FORCE_OFFICIAL="${{ github.event.inputs.force_official }}"
 
-          TODAY_UTC=$(date -u +%u)
+          TODAY_NY=$(TZ=America/New_York date +%u)
 
           # Scheduled runs are always official
           if [ "$EVENT" = "schedule" ]; then
