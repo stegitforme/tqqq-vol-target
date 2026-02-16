@@ -5,15 +5,26 @@ on:
     inputs:
       mode:
         description: "Run mode"
-        required: true
+        required: false
         default: "debug"
         type: choice
         options:
           - debug
           - official
+      asof:
+        description: "AS-OF date (YYYY-MM-DD). Leave blank to use latest available close."
+        required: false
+        default: ""
+      force_official:
+        description: "Allow OFFICIAL manual run even if not Friday (use carefully)"
+        required: false
+        default: false
+        type: boolean
+
   schedule:
-    # Friday after market close (6:10pm ET ≈ 23:10 UTC)
-    - cron: "10 23 * * 5"
+    # Run later on Friday so Yahoo data is definitely updated.
+    # 01:10 UTC Saturday = 8:10pm ET Friday = 5:10pm PT Friday
+    - cron: "10 1 * * 6"
 
 permissions:
   contents: write
@@ -32,25 +43,28 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Decide run mode (scheduled = official, manual = your choice)
       - name: Decide run mode
+        id: mode
         run: |
           set -e
 
           EVENT="${{ github.event_name }}"
           MODE_INPUT="${{ github.event.inputs.mode }}"
+          ASOF_INPUT="${{ github.event.inputs.asof }}"
+          FORCE_OFFICIAL="${{ github.event.inputs.force_official }}"
 
+          TODAY_UTC=$(date -u +%u)
+
+          # Scheduled runs are always official
           if [ "$EVENT" = "schedule" ]; then
             MODE="official"
           else
             MODE="${MODE_INPUT:-debug}"
           fi
 
-          TODAY_UTC=$(date -u +%u)
-
-          # Block "official" unless it's Friday (UTC day=5)
-          if [ "$MODE" = "official" ] && [ "$TODAY_UTC" != "5" ]; then
-            echo "❌ Official run blocked: today is not Friday (UTC day=$TODAY_UTC). Use debug mode."
+          # Guardrail: block official unless it's Friday UTC, unless schedule OR force_official=true
+          if [ "$MODE" = "official" ] && [ "$EVENT" != "schedule" ] && [ "$FORCE_OFFICIAL" != "true" ] && [ "$TODAY_UTC" != "5" ]; then
+            echo "❌ Official run blocked: today is not Friday (UTC day=$TODAY_UTC). Use debug, or set force_official=true."
             exit 1
           fi
 
@@ -60,8 +74,11 @@ jobs:
             echo "DEBUG_RUN=0" >> $GITHUB_ENV
           fi
 
+          # Optional AS-OF date
+          echo "ASOF_DATE=$ASOF_INPUT" >> $GITHUB_ENV
           echo "MODE=$MODE" >> $GITHUB_ENV
-          echo "Run mode: $MODE (event=$EVENT, utc_day=$TODAY_UTC)"
+
+          echo "Run mode: $MODE (event=$EVENT, utc_day=$TODAY_UTC, asof=$ASOF_INPUT)"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -77,49 +94,22 @@ jobs:
         run: |
           python fetch_tqqq.py
           python weekly_report.py
-
-      # If official: append the latest row into logs/history_official.csv
-      - name: Update history_official.csv (official only)
-        if: env.DEBUG_RUN == '0'
-        run: |
-          python - << 'PY'
-          import pandas as pd
-          from pathlib import Path
-
-          hist_path = Path("logs/history.csv")
-          off_path  = Path("logs/history_official.csv")
-
-          hist = pd.read_csv(hist_path, parse_dates=["RunDate"])
-          hist["RunDate"] = pd.to_datetime(hist["RunDate"]).dt.normalize()
-          hist = hist.sort_values("RunDate").drop_duplicates(subset=["RunDate"], keep="last")
-
-          latest = hist.tail(1)
-
-          if off_path.exists():
-            off = pd.read_csv(off_path, parse_dates=["RunDate"])
-            off["RunDate"] = pd.to_datetime(off["RunDate"]).dt.normalize()
-            off = pd.concat([off, latest], ignore_index=True)
-            off = off.sort_values("RunDate").drop_duplicates(subset=["RunDate"], keep="last")
-          else:
-            off = latest
-
-          off.to_csv(off_path, index=False)
-          print("✅ Updated logs/history_official.csv with", latest.iloc[0]["RunDate"].date())
-          PY
+        env:
+          ASOF_DATE: ${{ env.ASOF_DATE }}
+          MODE: ${{ env.MODE }}
+          DEBUG_RUN: ${{ env.DEBUG_RUN }}
 
       - name: Commit updated data + report
         run: |
-          set -e
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-          # NOTE: weekly_report.py writes to output/ (including output/reports/)
           if [ "$DEBUG_RUN" = "1" ]; then
-            git add data/ logs/history.csv output/ || true
+            git add output/ reports/ logs/history.csv || true
             git commit -m "Debug TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
           else
-            git add data/ logs/history.csv logs/history_official.csv output/ || true
-            git commit -m "Weekly TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
+            git add output/ reports/ logs/history.csv logs/history_official.csv || true
+            git commit -m "Official TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
           fi
 
           git push
@@ -136,9 +126,9 @@ jobs:
         run: |
           set -e
 
-          REPORT_URL="$(cat output/latest_report_url.txt 2>/dev/null || true)"
-          SUBJECT="$(cat output/subject.txt 2>/dev/null || echo "TQQQ Vol Target Weekly Report")"
-          MESSAGE="$(cat output/message.txt 2>/dev/null || echo "Report generated.")"
+          REPORT_URL="$(cat output/latest_report_url.txt)"
+          SUBJECT="$(cat output/subject.txt)"
+          MESSAGE="$(cat output/message.txt)"
 
           {
             echo "$MESSAGE"
@@ -196,7 +186,7 @@ jobs:
               return (s or "").replace("\u00a0", " ").strip()
 
           smtp_server = clean(os.environ.get("SMTP_SERVER", ""))
-          smtp_port_raw = clean(os.environ.get("SMTP_PORT", "587"))
+          smtp_port_raw = clean(os.environ.get("SMTP_PORT", ""))
           smtp_user = clean(os.environ.get("SMTP_USERNAME", ""))
           smtp_pass = clean(os.environ.get("SMTP_PASSWORD", ""))
           email_from = clean(os.environ.get("EMAIL_FROM", ""))
