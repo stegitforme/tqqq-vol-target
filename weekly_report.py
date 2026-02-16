@@ -1,6 +1,6 @@
 # weekly_report.py
 # =========================
-# TQQQ Volatility Target (with ASOF_DATE support)
+# TQQQ Volatility Target
 # =========================
 
 from __future__ import annotations
@@ -35,108 +35,122 @@ REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 # -------------------------
 def load_history_clean(path: str) -> pd.DataFrame:
     """
-    Load a history CSV:
-      - parse RunDate
+    Load logs/history.csv:
       - normalize RunDate to date
       - sort
       - keep LAST row per date (fixes duplicate runs in same day)
     """
-    p = Path(path)
-    if not p.exists():
-        return pd.DataFrame()
-
-    df = pd.read_csv(p, parse_dates=["RunDate"])
-    if df.empty:
-        return df
-
-    df["RunDate"] = pd.to_datetime(df["RunDate"]).dt.normalize()
-    df = df.sort_values("RunDate")
-    df = df.drop_duplicates(subset=["RunDate"], keep="last").reset_index(drop=True)
-    return df
+    hist = pd.read_csv(path, parse_dates=["RunDate"])
+    hist["RunDate"] = pd.to_datetime(hist["RunDate"]).dt.normalize()
+    hist = hist.sort_values("RunDate")
+    hist = hist.drop_duplicates(subset=["RunDate"], keep="last").reset_index(drop=True)
+    return hist
 
 
-def pick_asof_row(history: pd.DataFrame, asof_date: pd.Timestamp | None) -> pd.Series:
+def parse_asof_date() -> pd.Timestamp | None:
+    raw = (os.environ.get("ASOF_DATE") or "").strip()
+    if not raw:
+        return None
+    try:
+        # Normalize to midnight (date-only)
+        return pd.to_datetime(raw).normalize()
+    except Exception as e:
+        raise RuntimeError(f"Invalid ASOF_DATE='{raw}'. Must be YYYY-MM-DD. Error: {e}")
+
+
+def pick_row_asof(history: pd.DataFrame, asof: pd.Timestamp | None) -> pd.Series:
     """
-    If asof_date is provided, pick the last row with RunDate <= asof_date.
-    Otherwise pick the last row.
+    If ASOF_DATE is provided:
+      - require data up to that date
+      - pick the last row with RunDate <= ASOF_DATE
+      - BUT if the picked date != ASOF_DATE, fail loudly (prevents silently using an older date).
+    If ASOF_DATE is not provided:
+      - use the most recent row.
     """
     if history.empty:
-        raise RuntimeError("logs/history.csv is empty or missing")
+        raise RuntimeError("logs/history.csv is empty")
 
-    if asof_date is None:
+    if asof is None:
         return history.iloc[-1]
 
-    eligible = history[history["RunDate"] <= asof_date]
-    if eligible.empty:
+    sub = history[history["RunDate"] <= asof]
+    if sub.empty:
+        max_dt = history["RunDate"].max()
         raise RuntimeError(
-            f"ASOF_DATE={asof_date.date()} but history has no RunDate <= that date"
+            f"ASOF_DATE={asof.date()} requested but history has no rows <= that date. "
+            f"Latest available is {max_dt.date()}."
         )
-    return eligible.iloc[-1]
+
+    picked = sub.iloc[-1]
+    picked_date = picked["RunDate"]
+
+    # STRICT: don’t silently use an older date if you asked for a specific date
+    if picked_date != asof:
+        raise RuntimeError(
+            f"ASOF_DATE={asof.date()} requested but the latest row <= ASOF is {picked_date.date()}. "
+            f"Your data fetch didn’t include {asof.date()} yet."
+        )
+
+    return picked
 
 
-def pct(x: float) -> int:
-    return int(round(float(x) * 100))
+def load_official_prev_alloc(curr_date: pd.Timestamp) -> float | None:
+    """
+    For 'Previous Allocation (official)', we want the prior OFFICIAL run.
+    Use logs/history_official.csv if it exists.
+    """
+    if not Path(HISTORY_OFFICIAL_PATH).exists():
+        return None
+
+    off = pd.read_csv(HISTORY_OFFICIAL_PATH, parse_dates=["RunDate"])
+    off["RunDate"] = pd.to_datetime(off["RunDate"]).dt.normalize()
+    off = off.sort_values("RunDate").drop_duplicates(subset=["RunDate"], keep="last").reset_index(drop=True)
+
+    prev_rows = off[off["RunDate"] < curr_date]
+    if prev_rows.empty:
+        return None
+    return float(prev_rows.iloc[-1]["AllocTQQQ"])
 
 
 # -------------------------
-# Read environment (ASOF_DATE + DEBUG_RUN)
+# Inputs from workflow env
 # -------------------------
-asof_raw = (os.environ.get("ASOF_DATE") or "").strip()
-asof_date = None
-if asof_raw:
-    # Accept YYYY-MM-DD
-    asof_date = pd.to_datetime(asof_raw).normalize()
-
-debug_run = (os.environ.get("DEBUG_RUN") or "0").strip() == "1"
-run_mode = "debug" if debug_run else "official"
+MODE = (os.environ.get("MODE") or "").strip().lower()  # debug / official
+ASOF_DATE = parse_asof_date()
 
 # -------------------------
-# Load histories
+# Load history + select as-of row
 # -------------------------
 history = load_history_clean(HISTORY_PATH)
-official_hist = load_history_clean(HISTORY_OFFICIAL_PATH)
+latest = pick_row_asof(history, ASOF_DATE)
 
-# -------------------------
-# Choose the row for "this week"
-# -------------------------
-latest = pick_asof_row(history, asof_date)
 curr_date = pd.to_datetime(latest["RunDate"]).normalize()
 
-# This is the actual row date we used
-print(f"ASOF_DATE={asof_raw or '(none)'} | using row date={curr_date.date()} | mode={run_mode}")
-
-# Current alloc
 curr_alloc = float(latest["AllocTQQQ"])
-curr_cash = float(latest["AllocCash"])
+curr_cash  = float(latest["AllocCash"])
 
-curr_alloc_pct = pct(curr_alloc)
-curr_cash_pct = pct(curr_cash)
+# Previous allocation logic:
+# - In OFFICIAL mode: use last official allocation from history_official.csv (if present)
+# - Otherwise: use last row strictly before current date from history.csv
+prev_alloc = None
+if MODE == "official":
+    prev_alloc = load_official_prev_alloc(curr_date)
+
+if prev_alloc is None:
+    prev_rows = history[history["RunDate"] < curr_date]
+    if len(prev_rows) > 0:
+        prev_alloc = float(prev_rows.iloc[-1]["AllocTQQQ"])
+    else:
+        prev_alloc = curr_alloc  # fallback for very first row
+
+prev_alloc_pct = int(round(prev_alloc * 100))
+curr_alloc_pct = int(round(curr_alloc * 100))
+curr_cash_pct  = int(round(curr_cash * 100))
 
 close_price = float(latest["Close"])
 realized_vol_pct = float(latest["RealizedVol20d"]) * 100
+
 run_date_str = curr_date.strftime("%Y-%m-%d")
-
-# -------------------------
-# Previous allocation logic
-# -------------------------
-# We want "Previous Allocation (official)" to come from official history if present.
-# If official history is missing/empty, fall back to "previous row in full history".
-prev_alloc_official = None
-
-if not official_hist.empty:
-    prev_off_rows = official_hist[official_hist["RunDate"] < curr_date]
-    if not prev_off_rows.empty:
-        prev_alloc_official = float(prev_off_rows.iloc[-1]["AllocTQQQ"])
-
-if prev_alloc_official is None:
-    # fallback: use full history prior row
-    prev_rows = history[history["RunDate"] < curr_date]
-    if not prev_rows.empty:
-        prev_alloc_official = float(prev_rows.iloc[-1]["AllocTQQQ"])
-    else:
-        prev_alloc_official = curr_alloc
-
-prev_alloc_pct = pct(prev_alloc_official)
 
 # -------------------------
 # Chart data (last 365 points)
@@ -144,14 +158,14 @@ prev_alloc_pct = pct(prev_alloc_official)
 chart_df = history.tail(365).copy()
 chart_dates = chart_df["RunDate"].dt.strftime("%Y-%m-%d").tolist()
 chart_alloc = (chart_df["AllocTQQQ"] * 100).round(2).tolist()
-chart_vol = (chart_df["RealizedVol20d"] * 100).round(2).tolist()
+chart_vol   = (chart_df["RealizedVol20d"] * 100).round(2).tolist()
 
 chart_dates_js = json.dumps(chart_dates)
 chart_alloc_js = json.dumps(chart_alloc)
-chart_vol_js = json.dumps(chart_vol)
+chart_vol_js   = json.dumps(chart_vol)
 
 # -------------------------
-# Report paths + URLs
+# Report paths + URLs (BASED ON ASOF/SELECTED DATE)
 # -------------------------
 report_rel_path = f"reports/{run_date_str}.html"
 report_file = REPORTS_DIR / f"{run_date_str}.html"
@@ -168,10 +182,9 @@ subject = f"TQQQ Vol Target | {curr_alloc_pct}% TQQQ / {curr_cash_pct}% Cash | V
 message = (
     f"{subject}\n"
     f"Date={run_date_str}\n"
-    f"Mode={run_mode}\n"
-    f"{'ASOF_DATE=' + asof_raw if asof_raw else ''}\n"
+    f"Mode={MODE or 'unknown'}\n"
     f"Report generated.\n"
-).strip() + "\n"
+)
 
 (OUTPUT_DIR / "subject.txt").write_text(subject, encoding="utf-8")
 (OUTPUT_DIR / "message.txt").write_text(message, encoding="utf-8")
@@ -208,7 +221,7 @@ html_tpl = Template(r"""
 
   <h1>TQQQ Volatility Target</h1>
   <div class="sub">Weekly sizing based on realized volatility</div>
-  <div class="pill">Target Vol = 20% • Lookback = 20 days • Rounding = 5% • Mode = $MODE$ASOF_PILL</div>
+  <div class="pill">Target Vol = 20% • Lookback = 20 days • Rounding = 5% • Mode = $MODE</div>
 
   <div class="grid">
     <div class="card">
@@ -239,10 +252,7 @@ html_tpl = Template(r"""
     <div class="card wide">
       <h2>Last 365 days trend (allocation + vol)</h2>
       <canvas id="chart"></canvas>
-      <div style="margin-top:10px; color:#777;">
-        Data comes from logs/history.csv (full log).
-        “Previous Allocation (official)” comes from logs/history_official.csv.
-      </div>
+      <div style="margin-top:10px; color:#777;">Data comes from logs/history.csv (full log). “Previous Allocation (official)” comes from logs/history_official.csv.</div>
     </div>
   </div>
 
@@ -257,8 +267,8 @@ html_tpl = Template(r"""
     data: {
       labels,
       datasets: [
-        { label: "TQQQ Allocation (%)", data: alloc, borderColor: "#4f83ff", tension: 0.25, yAxisID: "y" },
-        { label: "Realized Vol 20d (%)", data: vol, borderColor: "#ff6b81", tension: 0.25, yAxisID: "y1" }
+        { label: "TQQQ Allocation (%)", data: alloc, tension: 0.25, yAxisID: "y" },
+        { label: "Realized Vol 20d (%)", data: vol, tension: 0.25, yAxisID: "y1" }
       ]
     },
     options: {
@@ -266,7 +276,7 @@ html_tpl = Template(r"""
       interaction: { mode: "index", intersect: false },
       scales: {
         y:  { position: "left",  min: 0, max: 100, title: { display: true, text: "Allocation (%)" } },
-        y1: { position: "right", min: 0, max: 60, grid: { drawOnChartArea: false }, title: { display: true, text: "Realized Vol (%)" } }
+        y1: { position: "right", min: 0, max:  60, grid: { drawOnChartArea: false }, title: { display: true, text: "Realized Vol (%)" } }
       }
     }
   });
@@ -276,13 +286,8 @@ html_tpl = Template(r"""
 </html>
 """)
 
-asof_pill = ""
-if asof_raw:
-    asof_pill = f" • ASOF_DATE = {asof_raw}"
-
 html = html_tpl.substitute(
-    MODE=run_mode,
-    ASOF_PILL=asof_pill,
+    MODE=(MODE or "unknown"),
     RUN_DATE=run_date_str,
     CLOSE=f"{close_price:.2f}",
     VOL=f"{realized_vol_pct:.1f}",
