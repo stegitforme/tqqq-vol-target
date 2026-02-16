@@ -36,36 +36,24 @@ jobs:
         uses: actions/checkout@v4
 
       # -----------------------------
-      # Decide run mode (FIXED)
-      #   - schedule => ALWAYS official
-      #   - workflow_dispatch => use input (default debug)
-      #   - safe fallback if MODE is blank
+      # Decide run mode
       # -----------------------------
       - name: Decide run mode
         id: mode
         run: |
           set -e
 
-          EVENT_NAME="${{ github.event_name }}"
+          EVENT="${{ github.event_name }}"
           INPUT_MODE="${{ github.event.inputs.mode }}"
-
-          if [ "$EVENT_NAME" = "schedule" ]; then
-            MODE="official"
-          else
-            MODE="$INPUT_MODE"
-          fi
-
-          # Safety: if MODE is blank for any reason, default to official
-          if [ -z "${MODE:-}" ]; then
-            MODE="official"
-          fi
-
           TODAY_UTC=$(date -u +%u)
 
-          # Block "official" runs on non-Friday UTC (prevents manual official runs mid-week)
-          if [ "$MODE" = "official" ] && [ "$TODAY_UTC" != "5" ]; then
-            echo "❌ Official run blocked: today is not Friday (UTC day=$TODAY_UTC). Use debug mode."
-            exit 1
+          # Defaults:
+          # - schedule => official
+          # - workflow_dispatch => debug unless user chooses official
+          if [ "$EVENT" = "schedule" ]; then
+            MODE="official"
+          else
+            MODE="${INPUT_MODE:-debug}"
           fi
 
           if [ "$MODE" = "debug" ]; then
@@ -75,7 +63,10 @@ jobs:
           fi
 
           echo "MODE=$MODE" >> $GITHUB_ENV
-          echo "Run mode: $MODE (event=$EVENT_NAME, utc_day=$TODAY_UTC)"
+          echo "Run mode: $MODE (event=$EVENT, utc_day=$TODAY_UTC)"
+          if [ "$MODE" = "official" ] && [ "$TODAY_UTC" != "5" ]; then
+            echo "⚠️ NOTE: Running OFFICIAL manually on a non-Friday UTC day. This is allowed (manual override)."
+          fi
 
       # -----------------------------
       # Python
@@ -104,16 +95,19 @@ jobs:
       - name: Commit updated data + report
         run: |
           set -e
-
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-          if [ "$DEBUG_RUN" = "1" ]; then
-            git add output/ reports/ logs/history.csv || true
+          # Always commit outputs + history + reports
+          # (weekly_report.py writes output/weekly_report.html + output/reports/YYYY-MM-DD.html + logs/history.csv)
+          git add output/ logs/history.csv || true
+          git add output/reports/ || true
+          git add data/ || true
+
+          if [ "${DEBUG_RUN}" = "1" ]; then
             git commit -m "Debug TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
           else
-            git add output/ reports/ logs/history.csv logs/history_official.csv || true
-            git commit -m "Weekly TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
+            git commit -m "OFFICIAL TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
           fi
 
           git push
@@ -136,15 +130,12 @@ jobs:
         run: |
           set -e
 
-          REPORT_PATH="$(cat output/latest_report_path.txt)"
-          REPORT_URL="$(cat output/latest_report_url.txt)"
-
-          SUBJECT="$(cat output/subject.txt)"
-          MESSAGE="$(cat output/message.txt)"
+          REPORT_URL="$(cat output/latest_report_url.txt 2>/dev/null || true)"
+          SUBJECT="$(cat output/subject.txt 2>/dev/null || echo 'TQQQ Vol Target Weekly Report')"
+          MESSAGE="$(cat output/message.txt 2>/dev/null || echo 'Report generated.')"
 
           {
             echo "$MESSAGE"
-            echo "Mode=$MODE"
             echo ""
             echo "Open live report:"
             echo "$REPORT_URL"
@@ -165,7 +156,7 @@ jobs:
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
         run: |
-          if [ -z "$PUSHOVER_USER_KEY" ] || [ -z "$PUSHOVER_API_TOKEN" ]; then
+          if [ -z "${PUSHOVER_USER_KEY:-}" ] || [ -z "${PUSHOVER_API_TOKEN:-}" ]; then
             echo "Skipping Pushover (missing secrets)"
             exit 0
           fi
@@ -180,7 +171,7 @@ jobs:
             https://api.pushover.net/1/messages.json
 
       # -----------------------------
-      # Email (SMTP) — SAFE VERSION
+      # Email (SMTP)
       # -----------------------------
       - name: Send email (SMTP)
         if: always()
@@ -201,16 +192,20 @@ jobs:
               print("Skipping email (no body)")
               raise SystemExit(0)
 
-          def clean(s):
-              return s.replace("\u00a0", " ").strip()
+          def clean(s: str) -> str:
+              return (s or "").replace("\u00a0", " ").strip()
 
-          smtp_server = clean(os.environ["SMTP_SERVER"])
-          smtp_port = int(clean(os.environ.get("SMTP_PORT", "587")))
-          smtp_user = clean(os.environ["SMTP_USERNAME"])
-          smtp_pass = clean(os.environ["SMTP_PASSWORD"])
-          email_from = clean(os.environ["EMAIL_FROM"])
-          email_to = clean(os.environ["EMAIL_TO"])
+          smtp_server = clean(os.environ.get("SMTP_SERVER", ""))
+          smtp_port = int(clean(os.environ.get("SMTP_PORT", "587")) or "587")
+          smtp_user = clean(os.environ.get("SMTP_USERNAME", ""))
+          smtp_pass = clean(os.environ.get("SMTP_PASSWORD", ""))
+          email_from = clean(os.environ.get("EMAIL_FROM", ""))
+          email_to = clean(os.environ.get("EMAIL_TO", ""))
           subject = clean(os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report"))
+
+          if not smtp_server or not smtp_user or not smtp_pass or not email_from or not email_to:
+              print("Skipping email (missing SMTP secrets)")
+              raise SystemExit(0)
 
           body = open(path, "r", encoding="utf-8").read()
 
