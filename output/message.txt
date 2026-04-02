@@ -1,4 +1,6 @@
-TQQQ Vol Target | 40% TQQQ / 60% Cash | Vol20=53.0%
-Date=2026-02-09
-Mode=debug
-Report generated.
+TQQQ | Stage 0 | 0% TQQQ / 100% Cash | Vol20=67.7% | QQQ Below 200MA
+Date=2026-04-02  Mode=debug
+QQQ Close=$583.49  200MA=$594.95  50MA=$603.19
+RSI=45.6  MACD=❌ Bearish
+Stage: QQQ below all key MAs, no oversold bounce — Stage 0: 0% (SGOV)
+Vol-only alloc: 30%  →  Final alloc after stage cap: 0%
