@@ -1,112 +1,108 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>TQQQ Vol Target — 2026-04-02</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<meta charset="utf-8">
+<title>TQQQ Report 2026-04-02</title>
 <style>
-  *{box-sizing:border-box}
-  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f4f5;margin:0;padding:24px;color:#111}
-  h1{margin:0 0 4px;font-size:32px;font-weight:700}
-  .sub{color:#666;margin-bottom:16px;font-size:15px}
-  .config-pill{display:inline-block;background:#e0e7ff;color:#3730a3;padding:7px 14px;border-radius:999px;font-size:13px;margin-bottom:18px}
-  .stage-pill{display:inline-block;padding:10px 18px;border-radius:999px;font-size:15px;font-weight:600;margin-bottom:20px;background:#fee2e2;color:#991b1b}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-  .card{background:#fff;border-radius:16px;padding:20px 22px;box-shadow:0 4px 14px rgba(0,0,0,0.06)}
-  .card h2{margin:0 0 14px;font-size:20px;font-weight:600}
-  .wide{grid-column:1/-1}
-  table{width:100%;border-collapse:collapse}
-  td{padding:9px 0;border-bottom:1px solid #f0f0f0;font-size:15px;vertical-align:middle}
-  td:last-child{text-align:right;font-weight:600}
-  .muted{color:#777;font-weight:400}
-  .big{font-size:20px;font-weight:700}
-  .action-box{background:#f8faff;border-left:4px solid #4f46e5;border-radius:8px;padding:14px 16px;font-size:15px;line-height:1.65;margin-top:4px}
-  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  body { background:#0d0d0d; color:#e0e0e0; font-family:'Courier New',monospace; padding:24px; max-width:680px; margin:auto; }
+  h1 { color:#00e5ff; font-size:18px; letter-spacing:2px; border-bottom:1px solid #333; padding-bottom:8px; }
+  .section { margin:18px 0; }
+  .label { color:#888; font-size:12px; text-transform:uppercase; letter-spacing:1px; }
+  .big { font-size:28px; font-weight:bold; }
+  .pill { display:inline-block; padding:6px 16px; border-radius:4px; font-size:13px; font-weight:bold; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .card { background:#1a1a1a; border:1px solid #2a2a2a; border-radius:6px; padding:12px; }
+  .card .v { font-size:16px; font-weight:bold; color:#e0e0e0; margin-top:4px; }
+  .note { font-size:11px; color:#555; margin-top:4px; }
+  .action-box { background:#1a1a1a; border:2px solid #FF1744; border-radius:6px; padding:16px; margin:16px 0; }
+  .strategy-note { background:#111; border:1px solid #333; border-radius:6px; padding:12px; margin:16px 0; font-size:12px; color:#888; }
 </style>
 </head>
 <body>
 
-<h1>TQQQ Volatility Target</h1>
-<div class="sub">Weekly sizing · runs after Friday close · execute Monday open</div>
-<div class="config-pill">Target Vol = 20% &nbsp;|&nbsp; Lookback = 20d &nbsp;|&nbsp; Round = 5% &nbsp;|&nbsp; Mode = debug</div>
-<br>
-<div class="stage-pill">BLOCKED — 0% TQQQ</div>
+<h1>TQQQ WEEKLY SIGNAL — 2026-04-02</h1>
 
-<div class="grid">
-
-  <div class="card">
-    <h2>This week — 2026-04-02</h2>
-    <table>
-      <tr><td class="muted">TQQQ close</td>          <td>$43.05</td></tr>
-      <tr><td class="muted">QQQ close</td>           <td>$583.65</td></tr>
-      <tr><td class="muted">Realized vol (20d)</td>  <td>67.7%</td></tr>
-      <tr><td class="muted">Vol-only allocation</td> <td>30% TQQQ</td></tr>
-      <tr><td class="big">Re-entry stage</td>        <td class="big">Stage 0</td></tr>
-      <tr><td class="big">Previous alloc</td>        <td class="big">40% TQQQ</td></tr>
-      <tr><td class="big">Final allocation</td>      <td class="big">0% TQQQ / 100% SGOV</td></tr>
-    </table>
-  </div>
-
-  <div class="card">
-    <h2>Signal dashboard</h2>
-    <table>
-      <tr><td class="muted">QQQ vs 50MA ($603.19)</td>   <td>❌ Below</td></tr>
-      <tr><td class="muted">QQQ vs 100MA ($609.61)</td> <td>❌ Below</td></tr>
-      <tr><td class="muted">QQQ vs 200MA ($594.95)</td> <td>❌ Below</td></tr>
-      <tr><td class="muted">RSI (14)</td>               <td>45.7 &nbsp; 🔵 Neutral</td></tr>
-      <tr><td class="muted">MACD (12/26/9)</td>         <td>❌ Bearish</td></tr>
-    </table>
-  </div>
-
-  <div class="card wide">
-    <h2>What to do Monday</h2>
-    <div class="action-box">⛔ QQQ ($583.65) is below its 200-day MA ($594.95). TQQQ allocation is <strong>0%</strong>. Park everything in SGOV and wait. Watch for Stage 1: RSI ≤ 35 + MACD bullish crossover.</div>
-    <br>
-    <div style="font-size:13px;color:#888;line-height:1.6">
-      <strong>Stage ladder:</strong>
-      Stage 0 = QQQ below all MAs → 0% TQQQ. &nbsp;
-      Stage 1 = RSI ≤ 35 + MACD bullish → up to 20%. &nbsp;
-      Stage 2 = QQQ above 50MA → up to 50%. &nbsp;
-      Stage 3 = QQQ above 200MA → up to 80%. &nbsp;
-      Stage 4 = 3+ weeks above 200MA → full vol target.
-    </div>
-  </div>
-
-  <div class="card wide">
-    <h2>Last 365 days — allocation &amp; realized vol</h2>
-    <canvas id="chart" style="max-height:320px"></canvas>
-    <div style="margin-top:10px;color:#888;font-size:13px">
-      Allocation shown is the final staged allocation (vol target x stage cap). History from logs/history.csv.
-    </div>
-  </div>
-
+<div class="section">
+  <div class="label">Strategy</div>
+  <div style="font-size:14px; color:#00e5ff; margin-top:4px;">200MA-Only Binary Gate</div>
+  <div class="note">QQQ above 200MA → 100% TQQQ &nbsp;|&nbsp; QQQ below 200MA → 100% SGOV</div>
 </div>
 
-<script>
-const labels = ["2026-01-07", "2026-01-08", "2026-01-09", "2026-01-16", "2026-01-23", "2026-01-30", "2026-02-06", "2026-02-09", "2026-04-02"];
-const alloc  = [50.0, 50.0, 45.0, 60.0, 55.0, 50.0, 35.0, 40.0, 0.0];
-const vol    = [41.66, 42.08, 43.23, 32.33, 37.67, 40.37, 53.46, 53.01, 67.67];
-new Chart(document.getElementById("chart"),{
-  type:"line",
-  data:{
-    labels,
-    datasets:[
-      {label:"TQQQ Allocation (%)",data:alloc,tension:0.25,yAxisID:"y",
-       borderColor:"#4f46e5",backgroundColor:"rgba(79,70,229,0.08)",fill:true,pointRadius:2},
-      {label:"Realized Vol 20d (%)",data:vol,tension:0.25,yAxisID:"y1",
-       borderColor:"#f59e0b",backgroundColor:"transparent",pointRadius:2}
-    ]
-  },
-  options:{
-    responsive:true,
-    interaction:{mode:"index",intersect:false},
-    scales:{
-      y: {position:"left", min:0,max:100,title:{display:true,text:"Allocation (%)"}},
-      y1:{position:"right",min:0,max:80, grid:{drawOnChartArea:false},title:{display:true,text:"Realized Vol (%)"}}
-    }
-  }
-});
-</script>
+<div class="section">
+  <div class="label">200MA Gate</div>
+  <div class="big" style="color:#FF1744; margin-top:6px;">🔴 BELOW — 100% SGOV</div>
+  <div style="margin-top:4px; font-size:13px; color:#888;">
+    QQQ: $583.29 &nbsp;|&nbsp; 200MA: 594.95 &nbsp;|&nbsp; Distance: -2.0%
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">This Week's Allocation</div>
+  <div class="big" style="color:#FF1744; margin-top:6px;">
+    0% TQQQ &nbsp;/&nbsp; 100% SGOV
+  </div>
+  <div style="margin-top:4px; font-size:13px; color:#888;">Previous: 40%</div>
+</div>
+
+<div class="action-box">
+  <div class="label">What to do Monday</div>
+  <div style="font-size:20px; font-weight:bold; color:#FF1744; margin-top:6px;">SELL / REDUCE</div>
+  <div style="font-size:13px; color:#888; margin-top:6px;">
+    Target: 0% TQQQ / 100% SGOV
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">QQQ Moving Averages</div>
+  <div class="grid" style="margin-top:8px;">
+    <div class="card">
+      <div class="label">50-day MA</div>
+      <div class="v" style="color:#FF1744">603.18</div>
+      <div class="note">QQQ -3.3% from 50MA</div>
+    </div>
+    <div class="card">
+      <div class="label">100-day MA</div>
+      <div class="v" style="color:#FF1744">609.61</div>
+      <div class="note">QQQ -4.3% from 100MA</div>
+    </div>
+    <div class="card">
+      <div class="label">200-day MA ★ GATE</div>
+      <div class="v" style="color:#FF1744">594.95</div>
+      <div class="note">QQQ -2.0% from 200MA</div>
+    </div>
+    <div class="card">
+      <div class="label">RSI (14)</div>
+      <div class="v">44.8</div>
+      <div class="note">Neutral</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">Momentum Signals (informational)</div>
+  <div class="grid" style="margin-top:8px;">
+    <div class="card">
+      <div class="label">MACD</div>
+      <div class="v" style="color:#FF1744">Bearish ▼</div>
+      <div class="note">Line: -8.2972 / Signal: -7.9477</div>
+    </div>
+    <div class="card">
+      <div class="label">Vol-implied alloc</div>
+      <div class="v" style="color:#888">30%</div>
+      <div class="note">20d vol: 67.7% (info only — not used)</div>
+    </div>
+  </div>
+</div>
+
+<div class="strategy-note">
+  <strong style="color:#555;">Strategy note:</strong> This report uses the pure 200MA binary gate.
+  Vol-implied allocation is shown for reference but does not affect the actual position.
+  Backtest (2017–2025): 200MA-only +43% CAGR, $100K → $2.49M vs vol+200MA combo +23% CAGR, $100K → $627K.
+</div>
+
+<div style="font-size:11px; color:#333; margin-top:24px; border-top:1px solid #1a1a1a; padding-top:8px;">
+  Generated 2026-04-02 | Mode: DEBUG | TQQQ: $42.97 | QQQ: $583.29
+</div>
+
 </body>
 </html>
