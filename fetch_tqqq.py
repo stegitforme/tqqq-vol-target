@@ -1,46 +1,32 @@
 #!/usr/bin/env python3
 """
-Fetch TQQQ daily price history and write to data/TQQQ.csv
-
-Works:
-- locally
-- on GitHub Actions
-- without requiring a virtualenv path
+Fetch TQQQ and QQQ daily price history.
+Writes:
+  data/TQQQ.csv
+  data/QQQ.csv
 """
-
 from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
-
-# -------------------------------------------------
-# Paths (repo-root safe)
-# -------------------------------------------------
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
-PRICE_FILE = DATA_DIR / "TQQQ.csv"
 
-
-def main():
-    print("[fetch_tqqq] BASE =", BASE)
-
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    print("[fetch_tqqq] Downloading TQQQ data...")
+def fetch_ticker(ticker: str) -> None:
+    out_file = DATA_DIR / f"{ticker}.csv"
+    print(f"[fetch] Downloading {ticker}...")
     df = yf.download(
-        tickers="TQQQ",
+        tickers=ticker,
         period="max",
         interval="1d",
         auto_adjust=False,
         progress=False,
     )
-
     if df is None or df.empty:
-        raise RuntimeError("No data returned from yfinance")
+        raise RuntimeError(f"No data returned for {ticker}")
 
-    # Handle MultiIndex columns safely
     if isinstance(df.columns, pd.MultiIndex):
-        close = df["Close"]["TQQQ"]
+        close = df["Close"][ticker]
     else:
         close = df["Close"]
 
@@ -51,15 +37,15 @@ def main():
         .to_frame()
         .reset_index()
     )
-
     out["Date"] = pd.to_datetime(out["Date"]).dt.date.astype(str)
     out = out[["Date", "Close"]]
+    out.to_csv(out_file, index=False)
+    print(f"[fetch] Wrote {out_file} ({len(out)} rows), latest: {out['Date'].iloc[-1]}")
 
-    out.to_csv(PRICE_FILE, index=False)
-
-    print(f"[fetch_tqqq] Wrote {PRICE_FILE} ({len(out)} rows)")
-    print(out.tail(3))
-
+def main():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    fetch_ticker("TQQQ")
+    fetch_ticker("QQQ")
 
 if __name__ == "__main__":
     main()
