@@ -22,7 +22,7 @@ on:
         type: boolean
 
   schedule:
-    # Run later on Friday so Yahoo data is definitely updated.
+    # Run after Friday close so Yahoo data is definitely updated.
     # 01:10 UTC Saturday = 8:10pm ET Friday = 5:10pm PT Friday
     - cron: "10 1 * * 6"
 
@@ -53,7 +53,8 @@ jobs:
           ASOF_INPUT="${{ github.event.inputs.asof }}"
           FORCE_OFFICIAL="${{ github.event.inputs.force_official }}"
 
-          TODAY_NY=$(TZ=America/New_York date +%u)
+          # Get current day of week in UTC (1=Mon ... 5=Fri ... 7=Sun)
+          TODAY_UTC=$(date -u +%u)
 
           # Scheduled runs are always official
           if [ "$EVENT" = "schedule" ]; then
@@ -62,9 +63,9 @@ jobs:
             MODE="${MODE_INPUT:-debug}"
           fi
 
-          # Guardrail: block official unless it's Friday UTC, unless schedule OR force_official=true
+          # Guardrail: block manual OFFICIAL runs on non-Friday unless force_official=true
           if [ "$MODE" = "official" ] && [ "$EVENT" != "schedule" ] && [ "$FORCE_OFFICIAL" != "true" ] && [ "$TODAY_UTC" != "5" ]; then
-            echo "❌ Official run blocked: today is not Friday (UTC day=$TODAY_UTC). Use debug, or set force_official=true."
+            echo "❌ Official run blocked: today is not Friday (UTC day=$TODAY_UTC). Use debug, or check force_official."
             exit 1
           fi
 
@@ -74,11 +75,10 @@ jobs:
             echo "DEBUG_RUN=0" >> $GITHUB_ENV
           fi
 
-          # Optional AS-OF date
           echo "ASOF_DATE=$ASOF_INPUT" >> $GITHUB_ENV
           echo "MODE=$MODE" >> $GITHUB_ENV
 
-          echo "Run mode: $MODE (event=$EVENT, utc_day=$TODAY_UTC, asof=$ASOF_INPUT)"
+          echo "✅ Run mode: $MODE (event=$EVENT, utc_day=$TODAY_UTC, asof=${ASOF_INPUT:-latest})"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -105,11 +105,11 @@ jobs:
           git config user.email "github-actions@github.com"
 
           if [ "$DEBUG_RUN" = "1" ]; then
-            git add output/ reports/ logs/history.csv || true
-            git commit -m "Debug TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
+            git add output/ logs/history.csv data/QQQ.csv || true
+            git commit -m "Debug TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes to commit"
           else
-            git add output/ reports/ logs/history.csv logs/history_official.csv || true
-            git commit -m "Official TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes"
+            git add output/ logs/history.csv logs/history_official.csv data/QQQ.csv || true
+            git commit -m "Official TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes to commit"
           fi
 
           git push
@@ -125,7 +125,6 @@ jobs:
       - name: Prepare notification text
         run: |
           set -e
-
           REPORT_URL="$(cat output/latest_report_url.txt)"
           SUBJECT="$(cat output/subject.txt)"
           MESSAGE="$(cat output/message.txt)"
@@ -185,13 +184,13 @@ jobs:
           def clean(s: str) -> str:
               return (s or "").replace("\u00a0", " ").strip()
 
-          smtp_server = clean(os.environ.get("SMTP_SERVER", ""))
-          smtp_port_raw = clean(os.environ.get("SMTP_PORT", ""))
-          smtp_user = clean(os.environ.get("SMTP_USERNAME", ""))
-          smtp_pass = clean(os.environ.get("SMTP_PASSWORD", ""))
-          email_from = clean(os.environ.get("EMAIL_FROM", ""))
-          email_to = clean(os.environ.get("EMAIL_TO", ""))
-          subject = clean(os.environ.get("SUBJECT", "TQQQ Vol Target Weekly Report"))
+          smtp_server   = clean(os.environ.get("SMTP_SERVER",   ""))
+          smtp_port_raw = clean(os.environ.get("SMTP_PORT",     ""))
+          smtp_user     = clean(os.environ.get("SMTP_USERNAME", ""))
+          smtp_pass     = clean(os.environ.get("SMTP_PASSWORD", ""))
+          email_from    = clean(os.environ.get("EMAIL_FROM",    ""))
+          email_to      = clean(os.environ.get("EMAIL_TO",      ""))
+          subject       = clean(os.environ.get("SUBJECT",       "TQQQ Vol Target Weekly Report"))
 
           if not smtp_server or not smtp_user or not smtp_pass or not email_from or not email_to:
               print("Skipping email (missing SMTP secrets)")
@@ -201,8 +200,8 @@ jobs:
           body = open(path, "r", encoding="utf-8").read()
 
           msg = EmailMessage()
-          msg["From"] = email_from
-          msg["To"] = email_to
+          msg["From"]    = email_from
+          msg["To"]      = email_to
           msg["Subject"] = subject
           msg.set_content(body, charset="utf-8")
 
