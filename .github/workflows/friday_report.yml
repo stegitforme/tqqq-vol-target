@@ -35,13 +35,16 @@ concurrency:
   group: "pages"
   cancel-in-progress: true
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   run-report:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
 
       - name: Decide run mode
         id: mode
@@ -65,7 +68,7 @@ jobs:
 
           # Guardrail: block manual OFFICIAL runs on non-Friday unless force_official=true
           if [ "$MODE" = "official" ] && [ "$EVENT" != "schedule" ] && [ "$FORCE_OFFICIAL" != "true" ] && [ "$TODAY_UTC" != "5" ]; then
-            echo "❌ Official run blocked: today is not Friday (UTC day=$TODAY_UTC). Use debug, or check force_official."
+            echo "Official run blocked: today is not Friday (UTC day=$TODAY_UTC). Use debug, or check force_official."
             exit 1
           fi
 
@@ -78,10 +81,10 @@ jobs:
           echo "ASOF_DATE=$ASOF_INPUT" >> $GITHUB_ENV
           echo "MODE=$MODE" >> $GITHUB_ENV
 
-          echo "✅ Run mode: $MODE (event=$EVENT, utc_day=$TODAY_UTC, asof=${ASOF_INPUT:-latest})"
+          echo "Run mode: $MODE (event=$EVENT, utc_day=$TODAY_UTC, asof=${ASOF_INPUT:-latest})"
 
       - name: Set up Python
-        uses: actions/setup-python@v5.6.0
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -115,12 +118,12 @@ jobs:
           git push
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3.0.1
+        uses: actions/upload-pages-artifact@v3
         with:
           path: output
 
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4.0.5
+        uses: actions/deploy-pages@v4
 
       - name: Prepare notification text
         run: |
@@ -211,5 +214,5 @@ jobs:
               s.login(smtp_user, smtp_pass)
               s.send_message(msg)
 
-          print("✅ Email sent")
+          print("Email sent")
           PY
