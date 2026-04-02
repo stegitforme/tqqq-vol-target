@@ -22,7 +22,6 @@
   .muted{color:#777;font-weight:400}
   .big{font-size:20px;font-weight:700}
   .action-box{background:#f8faff;border-left:4px solid #4f46e5;border-radius:8px;padding:14px 16px;font-size:15px;line-height:1.65;margin-top:4px}
-  .signal-ok{color:#15803d}.signal-bad{color:#dc2626}.signal-warn{color:#b45309}.signal-neu{color:#4b5563}
   @media(max-width:760px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
@@ -36,62 +35,58 @@
 
 <div class="grid">
 
-  <!-- This week card -->
   <div class="card">
     <h2>This week — 2026-04-02</h2>
     <table>
-      <tr><td class="muted">TQQQ close</td>      <td>$42.90</td></tr>
-      <tr><td class="muted">QQQ close</td>       <td>$582.96</td></tr>
-      <tr><td class="muted">Realized vol (20d)</td><td>67.7%</td></tr>
-      <tr><td class="muted">Vol-only allocation</td><td>30% TQQQ</td></tr>
-      <tr><td class="big">Re-entry stage</td>    <td class="big">Stage 0</td></tr>
-      <tr><td class="big">Previous alloc</td>    <td class="big">40% TQQQ</td></tr>
-      <tr><td class="big">➡ Final allocation</td><td class="big">0% TQQQ&nbsp;/&nbsp;100% SGOV</td></tr>
+      <tr><td class="muted">TQQQ close</td>          <td>$43.05</td></tr>
+      <tr><td class="muted">QQQ close</td>           <td>$583.65</td></tr>
+      <tr><td class="muted">Realized vol (20d)</td>  <td>67.7%</td></tr>
+      <tr><td class="muted">Vol-only allocation</td> <td>30% TQQQ</td></tr>
+      <tr><td class="big">Re-entry stage</td>        <td class="big">Stage 0</td></tr>
+      <tr><td class="big">Previous alloc</td>        <td class="big">40% TQQQ</td></tr>
+      <tr><td class="big">Final allocation</td>      <td class="big">0% TQQQ / 100% SGOV</td></tr>
     </table>
   </div>
 
-  <!-- Signal dashboard -->
   <div class="card">
     <h2>Signal dashboard</h2>
     <table>
-      <tr><td class="muted">QQQ vs 50MA ($603.18)</td>    <td>❌ Below</td></tr>
-      <tr><td class="muted">QQQ vs 100MA ($609.61)</td>  <td>❌ Below</td></tr>
-      <tr><td class="muted">QQQ vs 200MA ($594.94)</td>  <td>❌ Below</td></tr>
-      <tr><td class="muted">RSI (14)</td>                <td>45.4 &nbsp; 🔵 Neutral</td></tr>
-      <tr><td class="muted">MACD (12/26/9)</td>          <td>❌ Bearish</td></tr>
+      <tr><td class="muted">QQQ vs 50MA ($603.19)</td>   <td>❌ Below</td></tr>
+      <tr><td class="muted">QQQ vs 100MA ($609.61)</td> <td>❌ Below</td></tr>
+      <tr><td class="muted">QQQ vs 200MA ($594.95)</td> <td>❌ Below</td></tr>
+      <tr><td class="muted">RSI (14)</td>               <td>45.7 &nbsp; 🔵 Neutral</td></tr>
+      <tr><td class="muted">MACD (12/26/9)</td>         <td>❌ Bearish</td></tr>
     </table>
   </div>
 
-  <!-- Action narrative -->
   <div class="card wide">
     <h2>What to do Monday</h2>
-    <div class="action-box">⛔ QQQ ($582.96) is below its 200-day MA ($594.94). TQQQ allocation is <strong>0%</strong>. Park everything in SGOV and wait. Watch for Stage 1: RSI ≤ 35 + MACD bullish crossover.</div>
+    <div class="action-box">⛔ QQQ ($583.65) is below its 200-day MA ($594.95). TQQQ allocation is <strong>0%</strong>. Park everything in SGOV and wait. Watch for Stage 1: RSI ≤ 35 + MACD bullish crossover.</div>
     <br>
     <div style="font-size:13px;color:#888;line-height:1.6">
       <strong>Stage ladder:</strong>
-      Stage 0 = QQQ below all MAs → 0% TQQQ.&nbsp;
-      Stage 1 = RSI ≤ 35 + MACD bullish → up to 20%.&nbsp;
-      Stage 2 = QQQ above 50MA → up to 50%.&nbsp;
-      Stage 3 = QQQ above 200MA → up to 80%.&nbsp;
+      Stage 0 = QQQ below all MAs → 0% TQQQ. &nbsp;
+      Stage 1 = RSI ≤ 35 + MACD bullish → up to 20%. &nbsp;
+      Stage 2 = QQQ above 50MA → up to 50%. &nbsp;
+      Stage 3 = QQQ above 200MA → up to 80%. &nbsp;
       Stage 4 = 3+ weeks above 200MA → full vol target.
     </div>
   </div>
 
-  <!-- Chart -->
   <div class="card wide">
     <h2>Last 365 days — allocation &amp; realized vol</h2>
     <canvas id="chart" style="max-height:320px"></canvas>
     <div style="margin-top:10px;color:#888;font-size:13px">
-      Allocation shown is the <em>final staged allocation</em> (vol target × stage cap). History from logs/history.csv.
+      Allocation shown is the final staged allocation (vol target x stage cap). History from logs/history.csv.
     </div>
   </div>
 
 </div>
 
 <script>
-const labels = ["2026-01-07", "2026-01-08", "2026-01-09", "2026-01-16", "2026-01-23", "2026-01-30", "2026-02-06", "2026-02-09", "2026-02-09", "2026-04-02"];
-const alloc  = [50.0, 50.0, 45.0, 60.0, 55.0, 50.0, 35.0, 40.0, 40.0, 0.0];
-const vol    = [41.66, 42.08, 43.23, 32.33, 37.67, 40.37, 53.46, 53.01, 53.01, 67.66];
+const labels = ["2026-01-07", "2026-01-08", "2026-01-09", "2026-01-16", "2026-01-23", "2026-01-30", "2026-02-06", "2026-02-09", "2026-04-02"];
+const alloc  = [50.0, 50.0, 45.0, 60.0, 55.0, 50.0, 35.0, 40.0, 0.0];
+const vol    = [41.66, 42.08, 43.23, 32.33, 37.67, 40.37, 53.46, 53.01, 67.67];
 new Chart(document.getElementById("chart"),{
   type:"line",
   data:{
