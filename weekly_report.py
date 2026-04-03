@@ -1,13 +1,12 @@
 # weekly_report.py
 # =========================
-# TQQQ 200MA Strategy  —  v4
-# Pure 200MA gate: 100% TQQQ above, 100% SGOV below
-# Vol metrics retained as informational display only
-# Turbo mode tracker: counts weeks below 200MA, flags reclaim events
+# TQQQ Vol(35%) + 200MA Strategy — v5
+# Vol-targeting: size TQQQ to target 35% annualized portfolio vol
+# 200MA gate: if QQQ below 200MA → 100% SGOV regardless
+# Turbo mode tracker retained
 # =========================
 
 from __future__ import annotations
-
 import json
 import os
 import math
@@ -17,31 +16,26 @@ from pathlib import Path
 # -------------------------
 # Config
 # -------------------------
-TARGET_VOL    = 0.20        # kept for informational vol display only
-LOOKBACK_DAYS = 20
-ROUND_STEP    = 0.05
-TRADING_DAYS  = 252
+TARGET_VOL      = 0.35   # ← CHANGED from 0.20 to 0.35
+LOOKBACK_DAYS   = 20
+ROUND_STEP      = 0.05
+TRADING_DAYS    = 252
+MA_50           = 50
+MA_100          = 100
+MA_200          = 200
+RSI_PERIOD      = 14
+MACD_FAST       = 12
+MACD_SLOW       = 26
+MACD_SIGNAL     = 9
+TURBO_MIN_WEEKS_BELOW  = 8
+TURBO_DURATION_WEEKS   = 12
 
-MA_50  = 50
-MA_100 = 100
-MA_200 = 200
-
-RSI_PERIOD  = 14
-MACD_FAST   = 12
-MACD_SLOW   = 26
-MACD_SIGNAL = 9
-
-TURBO_MIN_WEEKS_BELOW = 8    # must be below MA this many weeks to qualify
-TURBO_DURATION_WEEKS  = 12   # how long turbo mode lasts after reclaim
-
-TQQQ_CSV_PATH         = "data/TQQQ.csv"
-QQQ_CSV_PATH          = "data/QQQ.csv"
-HISTORY_PATH          = "logs/history.csv"
+TQQQ_CSV_PATH        = "data/TQQQ.csv"
+QQQ_CSV_PATH         = "data/QQQ.csv"
+HISTORY_PATH         = "logs/history.csv"
 HISTORY_OFFICIAL_PATH = "logs/history_official.csv"
-
-OUTPUT_DIR  = Path("output")
-REPORTS_DIR = OUTPUT_DIR / "reports"
-
+OUTPUT_DIR    = Path("output")
+REPORTS_DIR   = OUTPUT_DIR / "reports"
 PAGES_BASE_URL = "https://stegitforme.github.io/tqqq-vol-target"
 
 # -------------------------
@@ -81,6 +75,13 @@ def compute_realized_vol(series, window=20):
     variance = sum((r - mean)**2 for r in log_rets) / (len(log_rets) - 1)
     return math.sqrt(variance) * math.sqrt(TRADING_DAYS)
 
+def compute_vol_alloc(vol_ann, target_vol=TARGET_VOL):
+    """Size TQQQ so portfolio vol = target_vol. Capped at 100%."""
+    if vol_ann <= 0:
+        return 1.0
+    raw = target_vol / vol_ann
+    return round_to_step(min(1.0, raw), ROUND_STEP)
+
 def compute_sma(series, period):
     s = series.dropna()
     if len(s) < period:
@@ -105,12 +106,12 @@ def compute_macd(series, fast=12, slow=26, signal=9):
     s = series.dropna()
     if len(s) < slow + signal:
         return {"macd_line": None, "signal_line": None, "histogram": None, "bullish": None}
-    ema_fast    = s.ewm(span=fast,   adjust=False).mean()
-    ema_slow    = s.ewm(span=slow,   adjust=False).mean()
+    ema_fast    = s.ewm(span=fast, adjust=False).mean()
+    ema_slow    = s.ewm(span=slow, adjust=False).mean()
     macd_line   = ema_fast - ema_slow
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
     histogram   = macd_line - signal_line
-    bullish = bool(macd_line.iloc[-1] > signal_line.iloc[-1])
+    bullish     = bool(macd_line.iloc[-1] > signal_line.iloc[-1])
     return {
         "macd_line":   round(float(macd_line.iloc[-1]), 4),
         "signal_line": round(float(signal_line.iloc[-1]), 4),
@@ -145,21 +146,10 @@ def prev_official_alloc(asof):
 # Turbo mode tracker
 # -------------------------
 def compute_turbo_status(qqq_all_data, asof_dt, above_200ma_today):
-    """
-    Looks back through ALL historical QQQ daily data to determine:
-    1. How many consecutive weeks QQQ has been below 200MA
-    2. Whether turbo mode is currently active (and how many weeks remain)
-    3. The most recent turbo reclaim date if any
-
-    Returns a dict with turbo status info.
-    """
-    # Build daily above/below 200MA series using full history
     df = qqq_all_data.copy()
     df = df.sort_values("Date").reset_index(drop=True)
     closes = df["Close"].values
-    dates  = pd.to_datetime(df["Date"]).values
 
-    # Compute 200MA for each day
     above = []
     for i in range(len(closes)):
         if i < 199:
@@ -167,10 +157,8 @@ def compute_turbo_status(qqq_all_data, asof_dt, above_200ma_today):
         else:
             ma = closes[i-199:i+1].mean()
             above.append(closes[i] > ma)
-
     df["above_200"] = above
 
-    # Only use Fridays up to asof_dt for weekly analysis
     df["weekday"] = pd.to_datetime(df["Date"]).dt.weekday
     fridays = df[
         (df["weekday"] == 4) &
@@ -181,51 +169,37 @@ def compute_turbo_status(qqq_all_data, asof_dt, above_200ma_today):
     if fridays.empty:
         return _turbo_default()
 
-    # Count consecutive weeks below at current date
     weeks_below_now = 0
     for i in range(len(fridays) - 1, -1, -1):
         if fridays.iloc[i]["above_200"]:
             break
         weeks_below_now += 1
 
-    # Find all reclaim events (below 8+ weeks → crosses above)
-    # Walk through fridays chronologically
-    turbo_reclaim_date = None
-    turbo_active       = False
-    turbo_weeks_done   = 0
-    turbo_weeks_left   = 0
-    last_reclaim_date  = None
-    last_below_count   = None
+    turbo_active      = False
+    turbo_weeks_done  = 0
+    turbo_weeks_left  = 0
+    last_reclaim_date = None
+    last_below_count  = None
 
     i = 0
     while i < len(fridays):
         row = fridays.iloc[i]
         if not row["above_200"]:
-            # Count consecutive below run
-            below_start = i
             j = i
             while j < len(fridays) and not fridays.iloc[j]["above_200"]:
                 j += 1
             below_weeks = j - i
-            below_run_start = pd.to_datetime(fridays.iloc[below_start]["Date"])
-
-            # Did it reclaim after 8+ weeks?
             if below_weeks >= TURBO_MIN_WEEKS_BELOW and j < len(fridays):
-                reclaim_date = pd.to_datetime(fridays.iloc[j]["Date"])
+                reclaim_date      = pd.to_datetime(fridays.iloc[j]["Date"])
                 last_reclaim_date = reclaim_date
                 last_below_count  = below_weeks
-
-                # Check if we're inside the 12-week turbo window
-                # Count how many Fridays since reclaim up to today
-                fridays_since = len(fridays) - j  # includes the reclaim Friday
+                fridays_since     = len(fridays) - j
                 if fridays_since <= TURBO_DURATION_WEEKS:
-                    turbo_active      = True
-                    turbo_reclaim_date = reclaim_date
-                    turbo_weeks_done  = fridays_since
-                    turbo_weeks_left  = TURBO_DURATION_WEEKS - fridays_since
+                    turbo_active     = True
+                    turbo_weeks_done = fridays_since
+                    turbo_weeks_left = TURBO_DURATION_WEEKS - fridays_since
                 else:
                     turbo_active = False
-
             i = j + 1 if j < len(fridays) else j
         else:
             i += 1
@@ -239,7 +213,8 @@ def compute_turbo_status(qqq_all_data, asof_dt, above_200ma_today):
         "last_below_count":   last_below_count,
         "trigger_threshold":  TURBO_MIN_WEEKS_BELOW,
         "turbo_duration":     TURBO_DURATION_WEEKS,
-        "weeks_to_trigger":   max(0, TURBO_MIN_WEEKS_BELOW - weeks_below_now) if weeks_below_now > 0 and not above_200ma_today else 0,
+        "weeks_to_trigger":   max(0, TURBO_MIN_WEEKS_BELOW - weeks_below_now)
+                              if weeks_below_now > 0 and not above_200ma_today else 0,
     }
 
 def _turbo_default():
@@ -248,8 +223,7 @@ def _turbo_default():
         "turbo_reclaim_date": None, "turbo_weeks_done": 0,
         "turbo_weeks_left": 0, "last_below_count": None,
         "trigger_threshold": TURBO_MIN_WEEKS_BELOW,
-        "turbo_duration": TURBO_DURATION_WEEKS,
-        "weeks_to_trigger": 0,
+        "turbo_duration": TURBO_DURATION_WEEKS, "weeks_to_trigger": 0,
     }
 
 # -------------------------
@@ -259,7 +233,6 @@ MODE      = (os.environ.get("MODE") or "debug").strip().lower()
 ASOF_DATE = parse_asof_date()
 
 tqqq = load_prices(TQQQ_CSV_PATH, "TQQQ")
-
 if ASOF_DATE is None:
     asof_dt = pd.to_datetime(tqqq["Date"].iloc[-1]).normalize()
 else:
@@ -275,29 +248,34 @@ if asof_rows.empty:
 tqqq_close  = float(asof_rows["Close"].iloc[-1])
 tqqq_prices = tqqq[pd.to_datetime(tqqq["Date"]).dt.normalize() <= asof_dt]["Close"]
 
-qqq = load_prices(QQQ_CSV_PATH, "QQQ")
-qqq_rows = qqq[pd.to_datetime(qqq["Date"]).dt.normalize() == asof_dt]
-qqq_close  = float(qqq_rows["Close"].iloc[-1]) if not qqq_rows.empty else float(qqq["Close"].iloc[-1])
+qqq       = load_prices(QQQ_CSV_PATH, "QQQ")
+qqq_rows  = qqq[pd.to_datetime(qqq["Date"]).dt.normalize() == asof_dt]
+qqq_close = float(qqq_rows["Close"].iloc[-1]) if not qqq_rows.empty else float(qqq["Close"].iloc[-1])
 qqq_prices = qqq[pd.to_datetime(qqq["Date"]).dt.normalize() <= asof_dt]["Close"]
 
 # -------------------------
 # Compute indicators
 # -------------------------
 vol_ann = compute_realized_vol(tqqq_prices, LOOKBACK_DAYS) or 0.50
-vol_implied = round_to_step(min(1.0, TARGET_VOL / vol_ann), ROUND_STEP)
-
-ma50  = compute_sma(qqq_prices, MA_50)
-ma100 = compute_sma(qqq_prices, MA_100)
-ma200 = compute_sma(qqq_prices, MA_200)
-rsi   = compute_rsi(qqq_prices, RSI_PERIOD)
-macd  = compute_macd(qqq_prices, MACD_FAST, MACD_SLOW, MACD_SIGNAL)
+ma50    = compute_sma(qqq_prices, MA_50)
+ma100   = compute_sma(qqq_prices, MA_100)
+ma200   = compute_sma(qqq_prices, MA_200)
+rsi     = compute_rsi(qqq_prices, RSI_PERIOD)
+macd    = compute_macd(qqq_prices, MACD_FAST, MACD_SLOW, MACD_SIGNAL)
 
 # -------------------------
-# 200MA Gate — pure binary
+# Vol(35%) + 200MA Gate
 # -------------------------
 above_200ma = (ma200 is not None) and (qqq_close > ma200)
-alloc_final = 1.0 if above_200ma else 0.0
-cash_final  = 1.0 - alloc_final
+
+if above_200ma:
+    # Size TQQQ to target 35% portfolio volatility
+    alloc_final = compute_vol_alloc(vol_ann, TARGET_VOL)
+    cash_final  = 1.0 - alloc_final
+else:
+    # QQQ below 200MA — exit entirely to SGOV
+    alloc_final = 0.0
+    cash_final  = 1.0
 
 # -------------------------
 # Turbo mode status
@@ -310,26 +288,26 @@ turbo = compute_turbo_status(qqq, asof_dt, above_200ma)
 run_date_str    = asof_dt.strftime("%Y-%m-%d")
 vol_pct         = vol_ann * 100
 alloc_final_pct = int(round(alloc_final * 100))
-vol_implied_pct = int(round(vol_implied * 100))
-cash_pct        = int(round(cash_final * 100))
+cash_pct        = int(round(cash_final  * 100))
 
 row = {
-    "RunDate":          run_date_str,
-    "TQQQ_Close":       tqqq_close,
-    "QQQ_Close":        qqq_close,
-    "RealizedVol20d":   vol_ann,
-    "VolImpliedAlloc":  vol_implied,
-    "QQQ_MA50":         round(ma50,  2) if ma50  is not None else None,
-    "QQQ_MA100":        round(ma100, 2) if ma100 is not None else None,
-    "QQQ_MA200":        round(ma200, 2) if ma200 is not None else None,
-    "QQQ_RSI":          round(rsi,   2) if rsi   is not None else None,
-    "MACD_Bullish":     macd["bullish"],
-    "MA200_Gate":       above_200ma,
-    "AllocTQQQ":        alloc_final,
-    "AllocCash":        cash_final,
-    "WeeksBelow200MA":  turbo["weeks_below_now"],
-    "TurboActive":      turbo["turbo_active"],
-    "TurboWeeksLeft":   turbo["turbo_weeks_left"],
+    "RunDate":         run_date_str,
+    "TQQQ_Close":      tqqq_close,
+    "QQQ_Close":       qqq_close,
+    "RealizedVol20d":  vol_ann,
+    "TargetVol":       TARGET_VOL,
+    "VolImpliedAlloc": alloc_final,
+    "QQQ_MA50":        round(ma50,  2) if ma50  is not None else None,
+    "QQQ_MA100":       round(ma100, 2) if ma100 is not None else None,
+    "QQQ_MA200":       round(ma200, 2) if ma200 is not None else None,
+    "QQQ_RSI":         round(rsi,   2) if rsi   is not None else None,
+    "MACD_Bullish":    macd["bullish"],
+    "MA200_Gate":      above_200ma,
+    "AllocTQQQ":       alloc_final,
+    "AllocCash":       cash_final,
+    "WeeksBelow200MA": turbo["weeks_below_now"],
+    "TurboActive":     turbo["turbo_active"],
+    "TurboWeeksLeft":  turbo["turbo_weeks_left"],
 }
 
 history = upsert_history_row(HISTORY_PATH, row)
@@ -351,12 +329,12 @@ prev_alloc_pct = int(round(prev_alloc * 100)) if prev_alloc is not None else Non
 
 if prev_alloc is None:
     action_label = "HOLD"
-elif alloc_final > prev_alloc:
-    action_label = "BUY — enter TQQQ"
-elif alloc_final < prev_alloc:
-    action_label = "SELL — exit to SGOV"
+elif alloc_final > prev_alloc + 0.04:
+    action_label = "BUY / ADD — increase TQQQ"
+elif alloc_final < prev_alloc - 0.04:
+    action_label = "SELL / REDUCE — decrease TQQQ"
 else:
-    action_label = "HOLD — no change"
+    action_label = "HOLD — no meaningful change"
 
 def ma_dist(price, ma):
     if ma is None: return "N/A"
@@ -367,36 +345,26 @@ def ma_dist(price, ma):
 # Turbo display strings
 # -------------------------
 def turbo_status_html(t):
-    """Returns an HTML block summarizing turbo mode status."""
     if t["turbo_active"]:
-        wl = t["turbo_weeks_left"]
-        wd = t["turbo_weeks_done"]
+        wl = t["turbo_weeks_left"]; wd = t["turbo_weeks_done"]
         rd = t["turbo_reclaim_date"]
         bar_pct = int((wd / t["turbo_duration"]) * 100)
         return f"""
 <div style="background:#1a2a1a;border:2px solid #00C853;border-radius:6px;padding:16px;margin:16px 0;">
   <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">🚀 Turbo Mode — ACTIVE</div>
   <div style="font-size:22px;font-weight:bold;color:#00C853;">Week {wd} of {t['turbo_duration']}</div>
-  <div style="font-size:13px;color:#888;margin-top:4px;">{wl} weeks remaining &nbsp;|&nbsp; Reclaim date: {rd}</div>
+  <div style="font-size:13px;color:#888;margin-top:4px;">{wl} weeks remaining | Reclaim: {rd}</div>
   <div style="margin-top:10px;background:#0a0a0a;border-radius:4px;height:8px;overflow:hidden;">
     <div style="background:#00C853;height:100%;width:{bar_pct}%;border-radius:4px;"></div>
   </div>
-  <div style="font-size:12px;color:#00C853;margin-top:8px;">
-    ✅ Deploy extra capital now. Hold turbo position for {wl} more week{'s' if wl!=1 else ''}, then revert to normal 100% TQQQ.
-  </div>
 </div>"""
-
     elif not t["turbo_active"] and t["weeks_below_now"] > 0:
-        wb  = t["weeks_below_now"]
-        thr = t["trigger_threshold"]
+        wb = t["weeks_below_now"]; thr = t["trigger_threshold"]
         remaining = max(0, thr - wb)
-        bar_pct = int(min(100, (wb / thr) * 100))
-        if remaining == 0:
-            status_line = "⏳ Threshold reached — waiting for 200MA reclaim to start turbo"
-            bar_color = "#FFC107"
-        else:
-            status_line = f"⏳ {remaining} more week{'s' if remaining!=1 else ''} below needed to arm the turbo trigger"
-            bar_color = "#FF6B35"
+        bar_pct   = int(min(100, (wb / thr) * 100))
+        bar_color = "#FFC107" if remaining == 0 else "#FF6B35"
+        status_line = ("⏳ Threshold reached — waiting for 200MA reclaim" if remaining == 0
+                       else f"⏳ {remaining} more week{'s' if remaining!=1 else ''} below to arm turbo")
         return f"""
 <div style="background:#1a1a0a;border:2px solid {bar_color};border-radius:6px;padding:16px;margin:16px 0;">
   <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">⏳ Turbo Mode — Arming</div>
@@ -405,33 +373,28 @@ def turbo_status_html(t):
   <div style="margin-top:10px;background:#0a0a0a;border-radius:4px;height:8px;overflow:hidden;">
     <div style="background:{bar_color};height:100%;width:{bar_pct}%;border-radius:4px;"></div>
   </div>
-  <div style="font-size:12px;color:{bar_color};margin-top:8px;">
-    Normal 100% TQQQ position when QQQ reclaims MA. Extra capital deploys only after {thr}+ weeks below.
-  </div>
 </div>"""
-
     else:
-        # Above 200MA, no turbo
-        last_rd = t.get("turbo_reclaim_date")
-        last_note = f"Last turbo: {last_rd}" if last_rd else "No turbo events yet in history"
+        last_rd   = t.get("turbo_reclaim_date")
+        last_note = f"Last turbo: {last_rd}" if last_rd else "No turbo events yet"
         return f"""
 <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:6px;padding:14px;margin:16px 0;">
   <div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Turbo Mode — Standby</div>
-  <div style="font-size:14px;color:#555;">QQQ is above 200MA — standard 100% TQQQ position active.</div>
-  <div style="font-size:11px;color:#444;margin-top:4px;">{last_note} &nbsp;|&nbsp; Triggers after {TURBO_MIN_WEEKS_BELOW}+ weeks below, then holds {TURBO_DURATION_WEEKS} weeks</div>
+  <div style="font-size:14px;color:#555;">QQQ above 200MA — vol-sized TQQQ position active.</div>
+  <div style="font-size:11px;color:#444;margin-top:4px;">{last_note} | Triggers after {TURBO_MIN_WEEKS_BELOW}+ weeks below</div>
 </div>"""
 
 def turbo_status_text(t):
     if t["turbo_active"]:
         return (f"🚀 TURBO ACTIVE: Week {t['turbo_weeks_done']} of {t['turbo_duration']} "
-                f"({t['turbo_weeks_left']} weeks left) — reclaim date {t['turbo_reclaim_date']}")
+                f"({t['turbo_weeks_left']} weeks left) — reclaim {t['turbo_reclaim_date']}")
     elif t["weeks_below_now"] > 0:
         rem = max(0, t["trigger_threshold"] - t["weeks_below_now"])
         if rem == 0:
             return f"⏳ TURBO ARMED: {t['weeks_below_now']} weeks below — waiting for 200MA reclaim"
-        return f"⏳ TURBO ARMING: {t['weeks_below_now']}/{t['trigger_threshold']} weeks below ({rem} more needed)"
+        return f"⏳ TURBO ARMING: {t['weeks_below_now']}/{t['trigger_threshold']} weeks below"
     else:
-        return "Turbo standby — QQQ above 200MA, normal position"
+        return "Turbo standby — QQQ above 200MA, vol-sized position active"
 
 # -------------------------
 # Email subject
@@ -447,24 +410,33 @@ elif turbo["weeks_below_now"] > 0:
 gate_str  = "Above 200MA" if above_200ma else "Below 200MA"
 alloc_str = f"{alloc_final_pct}% TQQQ" if alloc_final_pct > 0 else "0% TQQQ / 100% SGOV"
 email_subject = (
-    f"TQQQ | 200MA-Only | {alloc_str} | "
+    f"TQQQ | Vol({int(TARGET_VOL*100)}%)+200MA | {alloc_str} | "
     f"Vol20={vol_pct:.1f}% | QQQ {gate_str}{turbo_tag}"
 )
 
 # -------------------------
-# Colors
+# Colors + display helpers
 # -------------------------
 gate_color   = "#00C853" if above_200ma else "#FF1744"
-gate_label   = "✅ ABOVE — 100% TQQQ" if above_200ma else "🔴 BELOW — 100% SGOV"
-action_color = "#00C853" if action_label.startswith("BUY") else ("#FF1744" if action_label.startswith("SELL") else "#FFC107")
-
+gate_label   = "✅ ABOVE 200MA — Vol-sized TQQQ" if above_200ma else "🔴 BELOW 200MA — 100% SGOV"
+action_color = ("#00C853" if "BUY"  in action_label else
+                "#FF1744" if "SELL" in action_label else "#FFC107")
 ma50_str  = f"{ma50:.2f}"  if ma50  is not None else "N/A"
 ma100_str = f"{ma100:.2f}" if ma100 is not None else "N/A"
 ma200_str = f"{ma200:.2f}" if ma200 is not None else "N/A"
 rsi_str   = f"{rsi:.1f}"   if rsi   is not None else "N/A"
-macd_str  = "Bullish ▲" if macd["bullish"] else ("Bearish ▼" if macd["bullish"] is False else "N/A")
+macd_str  = ("Bullish ▲" if macd["bullish"] else
+             "Bearish ▼" if macd["bullish"] is False else "N/A")
 macd_color = "#00C853" if macd["bullish"] else ("#FF1744" if macd["bullish"] is False else "#888")
-prev_str   = f"{prev_alloc_pct}%" if prev_alloc_pct is not None else "—"
+prev_str  = f"{prev_alloc_pct}%" if prev_alloc_pct is not None else "—"
+
+vol_explain = (
+    f"TQQQ 20d vol = {vol_pct:.1f}% annualized → "
+    f"target {int(TARGET_VOL*100)}% portfolio vol → "
+    f"size = {int(TARGET_VOL*100)}% ÷ {vol_pct:.1f}% = {alloc_final_pct}% TQQQ"
+    if above_200ma else
+    "QQQ below 200MA — vol sizing overridden, 100% SGOV"
+)
 
 # -------------------------
 # HTML report
@@ -475,30 +447,37 @@ report_path = REPORTS_DIR / f"{run_date_str}.html"
 html = f"""<!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>TQQQ Report {run_date_str}</title>
-<style>
-  body {{ background:#0d0d0d; color:#e0e0e0; font-family:'Courier New',monospace; padding:24px; max-width:700px; margin:auto; }}
-  h1 {{ color:#00e5ff; font-size:18px; letter-spacing:2px; border-bottom:1px solid #333; padding-bottom:8px; }}
-  .section {{ margin:18px 0; }}
-  .label {{ color:#888; font-size:12px; text-transform:uppercase; letter-spacing:1px; }}
-  .big {{ font-size:28px; font-weight:bold; }}
-  .grid {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }}
-  .card {{ background:#1a1a1a; border:1px solid #2a2a2a; border-radius:6px; padding:12px; }}
-  .card .v {{ font-size:16px; font-weight:bold; color:#e0e0e0; margin-top:4px; }}
-  .note {{ font-size:11px; color:#555; margin-top:4px; }}
-  .action-box {{ background:#1a1a1a; border:2px solid {action_color}; border-radius:6px; padding:16px; margin:16px 0; }}
-  .strategy-note {{ background:#111; border:1px solid #333; border-radius:6px; padding:12px; margin:16px 0; font-size:12px; color:#888; }}
-</style>
+  <meta charset="utf-8">
+  <title>TQQQ Report {run_date_str}</title>
+  <style>
+    body {{ background:#0d0d0d; color:#e0e0e0; font-family:'Courier New',monospace;
+           padding:24px; max-width:700px; margin:auto; }}
+    h1   {{ color:#00e5ff; font-size:18px; letter-spacing:2px;
+           border-bottom:1px solid #333; padding-bottom:8px; }}
+    .section {{ margin:18px 0; }}
+    .label   {{ color:#888; font-size:12px; text-transform:uppercase; letter-spacing:1px; }}
+    .big     {{ font-size:28px; font-weight:bold; }}
+    .grid    {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }}
+    .card    {{ background:#1a1a1a; border:1px solid #2a2a2a; border-radius:6px; padding:12px; }}
+    .card .v {{ font-size:16px; font-weight:bold; color:#e0e0e0; margin-top:4px; }}
+    .note    {{ font-size:11px; color:#555; margin-top:4px; }}
+    .action-box {{ background:#1a1a1a; border:2px solid {action_color};
+                  border-radius:6px; padding:16px; margin:16px 0; }}
+    .vol-box    {{ background:#0a1a2a; border:1px solid #1a3a5a;
+                  border-radius:6px; padding:14px; margin:16px 0;
+                  font-size:13px; color:#7ab8e0; }}
+    .strategy-note {{ background:#111; border:1px solid #333;
+                      border-radius:6px; padding:12px; margin:16px 0;
+                      font-size:12px; color:#888; }}
+  </style>
 </head>
 <body>
-
 <h1>TQQQ WEEKLY SIGNAL — {run_date_str}</h1>
 
 <div class="section">
   <div class="label">Strategy</div>
-  <div style="font-size:14px; color:#00e5ff; margin-top:4px;">200MA-Only Binary Gate + Turbo Mode Tracker</div>
-  <div class="note">QQQ above 200MA → 100% TQQQ &nbsp;|&nbsp; QQQ below 200MA → 100% SGOV</div>
+  <div style="font-size:14px; color:#00e5ff; margin-top:4px;">Vol({int(TARGET_VOL*100)}%) + 200MA Gate</div>
+  <div class="note">QQQ above 200MA: size TQQQ to {int(TARGET_VOL*100)}% target vol &nbsp;|&nbsp; Below 200MA: 100% SGOV</div>
 </div>
 
 <div class="section">
@@ -507,6 +486,11 @@ html = f"""<!DOCTYPE html>
   <div style="margin-top:4px; font-size:13px; color:#888;">
     QQQ: ${qqq_close:.2f} &nbsp;|&nbsp; 200MA: {ma200_str} &nbsp;|&nbsp; Distance: {ma_dist(qqq_close, ma200)}
   </div>
+</div>
+
+<div class="vol-box">
+  <div class="label" style="color:#4a8ab0;">Vol Sizing Calculation</div>
+  <div style="margin-top:6px;">{vol_explain}</div>
 </div>
 
 <div class="section">
@@ -552,7 +536,7 @@ html = f"""<!DOCTYPE html>
 </div>
 
 <div class="section">
-  <div class="label">Momentum Signals (informational only)</div>
+  <div class="label">Additional Signals (informational)</div>
   <div class="grid" style="margin-top:8px;">
     <div class="card">
       <div class="label">MACD</div>
@@ -560,24 +544,25 @@ html = f"""<!DOCTYPE html>
       <div class="note">Line: {macd['macd_line']} / Signal: {macd['signal_line']}</div>
     </div>
     <div class="card">
-      <div class="label">Vol-implied alloc</div>
-      <div class="v" style="color:#888">{vol_implied_pct}%</div>
-      <div class="note">20d vol: {vol_pct:.1f}% (info only — not used)</div>
+      <div class="label">Realized Vol (20d)</div>
+      <div class="v">{vol_pct:.1f}%</div>
+      <div class="note">Target vol: {int(TARGET_VOL*100)}% → Alloc: {alloc_final_pct}%</div>
     </div>
   </div>
 </div>
 
 <div class="strategy-note">
-  <strong style="color:#555;">Turbo mode rule:</strong> When QQQ stays below the 200MA for {TURBO_MIN_WEEKS_BELOW}+ consecutive weeks then reclaims,
-  deploy extra capital (cash reserve or 5–15% margin) for {TURBO_DURATION_WEEKS} weeks, then revert.
-  This has occurred 4 times since 2016 with an average TQQQ return of +47.5% over 26 weeks at each reclaim.
-  Your weekly email will tell you exactly when to deploy and when to pull back.
+  <strong style="color:#777;">Vol({int(TARGET_VOL*100)}%) + 200MA:</strong>
+  When QQQ is above its 200-day MA, TQQQ is sized so the portfolio targets
+  {int(TARGET_VOL*100)}% annualized volatility — more TQQQ in calm markets,
+  less in volatile ones. When QQQ drops below the 200MA, everything moves to SGOV.
+  Backtest 2017–2025: +35.5% CAGR / -32.7% max DD.
 </div>
 
 <div style="font-size:11px; color:#333; margin-top:24px; border-top:1px solid #1a1a1a; padding-top:8px;">
-  Generated {run_date_str} | Mode: {MODE.upper()} | TQQQ: ${tqqq_close:.2f} | QQQ: ${qqq_close:.2f}
+  Generated {run_date_str} | Mode: {MODE.upper()} | Strategy: Vol({int(TARGET_VOL*100)}%)+200MA
+  | TQQQ: ${tqqq_close:.2f} | QQQ: ${qqq_close:.2f}
 </div>
-
 </body>
 </html>"""
 
@@ -588,23 +573,21 @@ with open(report_path, "w") as f:
 # Console output
 # -------------------------
 print(f"Subject: {email_subject}")
-print(f"Date:    {run_date_str}  |  Mode: {MODE}")
+print(f"Date: {run_date_str} | Mode: {MODE} | Strategy: Vol({int(TARGET_VOL*100)}%)+200MA")
 print()
-print(f"200MA Gate:    {'ABOVE ✅' if above_200ma else 'BELOW 🔴'}")
-print(f"QQQ:           ${qqq_close:.2f}  |  200MA: {ma200_str}  |  Dist: {ma_dist(qqq_close, ma200)}")
+print(f"200MA Gate: {'ABOVE ✅' if above_200ma else 'BELOW 🔴'}")
+print(f"QQQ: ${qqq_close:.2f} | 200MA: {ma200_str} | Dist: {ma_dist(qqq_close, ma200)}")
 print()
-print(f"ALLOCATION:    {alloc_final_pct}% TQQQ / {cash_pct}% SGOV")
-print(f"Previous:      {prev_str}  |  Action: {action_label}")
+print(f"VOL SIZING: {vol_explain}")
+print(f"ALLOCATION: {alloc_final_pct}% TQQQ / {cash_pct}% SGOV")
+print(f"Previous:   {prev_str} | Action: {action_label}")
 print()
 print(f"--- TURBO MODE ---")
 print(f"{turbo_status_text(turbo)}")
-print(f"Weeks below 200MA (current run): {turbo['weeks_below_now']}")
-print(f"Trigger threshold:               {TURBO_MIN_WEEKS_BELOW} weeks")
-print(f"Turbo duration:                  {TURBO_DURATION_WEEKS} weeks")
 print()
 print(f"--- Informational ---")
-print(f"Vol (20d):     {vol_pct:.1f}%  |  Vol-implied: {vol_implied_pct}%")
-print(f"RSI:           {rsi_str}  |  MACD: {macd_str}")
-print(f"50MA:  {ma50_str} ({ma_dist(qqq_close,ma50)})  |  100MA: {ma100_str} ({ma_dist(qqq_close,ma100)})")
+print(f"Vol (20d): {vol_pct:.1f}% | Target: {int(TARGET_VOL*100)}% | Alloc: {alloc_final_pct}%")
+print(f"RSI: {rsi_str} | MACD: {macd_str}")
+print(f"50MA: {ma50_str} ({ma_dist(qqq_close,ma50)}) | 100MA: {ma100_str}")
 print()
 print(f"Report: {report_path}")
