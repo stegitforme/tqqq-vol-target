@@ -1,38 +1,50 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>TQQQ Report 2026-04-02</title>
-<style>
-  body { background:#0d0d0d; color:#e0e0e0; font-family:'Courier New',monospace; padding:24px; max-width:700px; margin:auto; }
-  h1 { color:#00e5ff; font-size:18px; letter-spacing:2px; border-bottom:1px solid #333; padding-bottom:8px; }
-  .section { margin:18px 0; }
-  .label { color:#888; font-size:12px; text-transform:uppercase; letter-spacing:1px; }
-  .big { font-size:28px; font-weight:bold; }
-  .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  .card { background:#1a1a1a; border:1px solid #2a2a2a; border-radius:6px; padding:12px; }
-  .card .v { font-size:16px; font-weight:bold; color:#e0e0e0; margin-top:4px; }
-  .note { font-size:11px; color:#555; margin-top:4px; }
-  .action-box { background:#1a1a1a; border:2px solid #FF1744; border-radius:6px; padding:16px; margin:16px 0; }
-  .strategy-note { background:#111; border:1px solid #333; border-radius:6px; padding:12px; margin:16px 0; font-size:12px; color:#888; }
-</style>
+  <meta charset="utf-8">
+  <title>TQQQ Report 2026-04-02</title>
+  <style>
+    body { background:#0d0d0d; color:#e0e0e0; font-family:'Courier New',monospace;
+           padding:24px; max-width:700px; margin:auto; }
+    h1   { color:#00e5ff; font-size:18px; letter-spacing:2px;
+           border-bottom:1px solid #333; padding-bottom:8px; }
+    .section { margin:18px 0; }
+    .label   { color:#888; font-size:12px; text-transform:uppercase; letter-spacing:1px; }
+    .big     { font-size:28px; font-weight:bold; }
+    .grid    { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .card    { background:#1a1a1a; border:1px solid #2a2a2a; border-radius:6px; padding:12px; }
+    .card .v { font-size:16px; font-weight:bold; color:#e0e0e0; margin-top:4px; }
+    .note    { font-size:11px; color:#555; margin-top:4px; }
+    .action-box { background:#1a1a1a; border:2px solid #FF1744;
+                  border-radius:6px; padding:16px; margin:16px 0; }
+    .vol-box    { background:#0a1a2a; border:1px solid #1a3a5a;
+                  border-radius:6px; padding:14px; margin:16px 0;
+                  font-size:13px; color:#7ab8e0; }
+    .strategy-note { background:#111; border:1px solid #333;
+                      border-radius:6px; padding:12px; margin:16px 0;
+                      font-size:12px; color:#888; }
+  </style>
 </head>
 <body>
-
 <h1>TQQQ WEEKLY SIGNAL — 2026-04-02</h1>
 
 <div class="section">
   <div class="label">Strategy</div>
-  <div style="font-size:14px; color:#00e5ff; margin-top:4px;">200MA-Only Binary Gate + Turbo Mode Tracker</div>
-  <div class="note">QQQ above 200MA → 100% TQQQ &nbsp;|&nbsp; QQQ below 200MA → 100% SGOV</div>
+  <div style="font-size:14px; color:#00e5ff; margin-top:4px;">Vol(35%) + 200MA Gate</div>
+  <div class="note">QQQ above 200MA: size TQQQ to 35% target vol &nbsp;|&nbsp; Below 200MA: 100% SGOV</div>
 </div>
 
 <div class="section">
   <div class="label">200MA Gate</div>
-  <div class="big" style="color:#FF1744; margin-top:6px;">🔴 BELOW — 100% SGOV</div>
+  <div class="big" style="color:#FF1744; margin-top:6px;">🔴 BELOW 200MA — 100% SGOV</div>
   <div style="margin-top:4px; font-size:13px; color:#888;">
     QQQ: $584.98 &nbsp;|&nbsp; 200MA: 594.95 &nbsp;|&nbsp; Distance: -1.7%
   </div>
+</div>
+
+<div class="vol-box">
+  <div class="label" style="color:#4a8ab0;">Vol Sizing Calculation</div>
+  <div style="margin-top:6px;">QQQ below 200MA — vol sizing overridden, 100% SGOV</div>
 </div>
 
 <div class="section">
@@ -45,7 +57,7 @@
 
 <div class="action-box">
   <div class="label">What to do Monday</div>
-  <div style="font-size:20px; font-weight:bold; color:#FF1744; margin-top:6px;">SELL — exit to SGOV</div>
+  <div style="font-size:20px; font-weight:bold; color:#FF1744; margin-top:6px;">SELL / REDUCE — decrease TQQQ</div>
   <div style="font-size:13px; color:#888; margin-top:6px;">Target: 0% TQQQ / 100% SGOV</div>
 </div>
 
@@ -53,12 +65,9 @@
 <div style="background:#1a1a0a;border:2px solid #FF6B35;border-radius:6px;padding:16px;margin:16px 0;">
   <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">⏳ Turbo Mode — Arming</div>
   <div style="font-size:22px;font-weight:bold;color:#FF6B35;">2 / 8 weeks below</div>
-  <div style="font-size:13px;color:#888;margin-top:4px;">⏳ 6 more weeks below needed to arm the turbo trigger</div>
+  <div style="font-size:13px;color:#888;margin-top:4px;">⏳ 6 more weeks below to arm turbo</div>
   <div style="margin-top:10px;background:#0a0a0a;border-radius:4px;height:8px;overflow:hidden;">
     <div style="background:#FF6B35;height:100%;width:25%;border-radius:4px;"></div>
-  </div>
-  <div style="font-size:12px;color:#FF6B35;margin-top:8px;">
-    Normal 100% TQQQ position when QQQ reclaims MA. Extra capital deploys only after 8+ weeks below.
   </div>
 </div>
 
@@ -89,7 +98,7 @@
 </div>
 
 <div class="section">
-  <div class="label">Momentum Signals (informational only)</div>
+  <div class="label">Additional Signals (informational)</div>
   <div class="grid" style="margin-top:8px;">
     <div class="card">
       <div class="label">MACD</div>
@@ -97,23 +106,24 @@
       <div class="note">Line: -8.1624 / Signal: -7.9207</div>
     </div>
     <div class="card">
-      <div class="label">Vol-implied alloc</div>
-      <div class="v" style="color:#888">30%</div>
-      <div class="note">20d vol: 67.8% (info only — not used)</div>
+      <div class="label">Realized Vol (20d)</div>
+      <div class="v">67.8%</div>
+      <div class="note">Target vol: 35% → Alloc: 0%</div>
     </div>
   </div>
 </div>
 
 <div class="strategy-note">
-  <strong style="color:#555;">Turbo mode rule:</strong> When QQQ stays below the 200MA for 8+ consecutive weeks then reclaims,
-  deploy extra capital (cash reserve or 5–15% margin) for 12 weeks, then revert.
-  This has occurred 4 times since 2016 with an average TQQQ return of +47.5% over 26 weeks at each reclaim.
-  Your weekly email will tell you exactly when to deploy and when to pull back.
+  <strong style="color:#777;">Vol(35%) + 200MA:</strong>
+  When QQQ is above its 200-day MA, TQQQ is sized so the portfolio targets
+  35% annualized volatility — more TQQQ in calm markets,
+  less in volatile ones. When QQQ drops below the 200MA, everything moves to SGOV.
+  Backtest 2017–2025: +35.5% CAGR / -32.7% max DD.
 </div>
 
 <div style="font-size:11px; color:#333; margin-top:24px; border-top:1px solid #1a1a1a; padding-top:8px;">
-  Generated 2026-04-02 | Mode: DEBUG | TQQQ: $43.33 | QQQ: $584.98
+  Generated 2026-04-02 | Mode: DEBUG | Strategy: Vol(35%)+200MA
+  | TQQQ: $43.33 | QQQ: $584.98
 </div>
-
 </body>
 </html>
