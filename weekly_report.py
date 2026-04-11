@@ -568,6 +568,22 @@ html = f"""<!DOCTYPE html>
 
 with open(report_path, "w") as f:
     f.write(html)
+    # Write metadata files for workflow email
+report_url = PAGES_BASE_URL + "/reports/" + run_date_str + ".html"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+with open(OUTPUT_DIR / "latest_report_url.txt", "w") as f:
+    f.write(report_url)
+with open(OUTPUT_DIR / "subject.txt", "w") as f:
+    f.write(email_subject)
+email_body = "\n".join([
+    email_subject,
+    "Date=" + run_date_str + " Mode=" + MODE,
+    "QQQ Close=$" + str(round(qqq_close,2)) + " 200MA=$" + ma200_str,
+    ("ABOVE 200MA" if above_200ma else "BELOW 200MA") + " — " + str(alloc_final_pct) + "% TQQQ / " + str(cash_pct) + "% SGOV",
+    "Vol (20d): " + str(round(vol_pct,1)) + "% -> Alloc: " + str(alloc_final_pct) + "%",
+])
+with open(OUTPUT_DIR / "message.txt", "w") as f:
+    f.write(email_body)
 
 # -------------------------
 # Console output
