@@ -1,6 +1,5 @@
-TQQQ | Stage 0 | 0% TQQQ / 100% Cash | Vol20=67.7% | QQQ Below 200MA
-Date=2026-04-02  Mode=debug
-QQQ Close=$583.65  200MA=$594.95  50MA=$603.19
-RSI=45.7  MACD=❌ Bearish
-Stage: QQQ below all key MAs, no oversold bounce — Stage 0: 0% (SGOV)
-Vol-only alloc: 30%  ->  Final alloc after stage cap: 0%
+TQQQ | Vol(35%)+200MA | 50% TQQQ | Vol20=69.9% | QQQ Above 200MA
+Date=2026-04-10 Mode=debug
+QQQ Close=$611.07 200MA=$596.70
+ABOVE 200MA — 50% TQQQ / 50% SGOV
+Vol (20d): 69.9% -> Alloc: 50%
