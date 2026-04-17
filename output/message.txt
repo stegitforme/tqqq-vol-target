@@ -1,5 +1,5 @@
-TQQQ | Vol(35%)+200MA | 50% TQQQ | Vol20=69.9% | QQQ Above 200MA
-Date=2026-04-10 Mode=debug
-QQQ Close=$611.07 200MA=$596.70
+TQQQ | Vol(35%)+200MA | 50% TQQQ | Vol20=70.4% | QQQ Above 200MA
+Date=2026-04-17  Mode=debug
+QQQ Close=$649.64  200MA=$598.89
 ABOVE 200MA — 50% TQQQ / 50% SGOV
-Vol (20d): 69.9% -> Alloc: 50%
+Vol (20d): 70.4%  (5d ago: 69.9%)  Guard: standby
