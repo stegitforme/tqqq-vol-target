@@ -651,6 +651,10 @@ email_body = "\n".join([
 with open(OUTPUT_DIR / "message.txt", "w") as f:
     f.write(email_body)
 
+# Write HTML email
+with open(OUTPUT_DIR / "email_html.html", "w") as f:
+    f.write(email_html)
+
 # -------------------------
 # Console output
 # -------------------------
