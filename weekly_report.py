@@ -625,7 +625,6 @@ body{{background:#080a0e;color:#e8eaf0;font-family:-apple-system,BlinkMacSystemF
 # Vol Acceleration Guard: if vol rises 30%+ in 5 days AND vol > 45% → cap at 50%
 # Turbo mode tracker retained
 # =========================
-from __future__ import annotations
 import json
 import os
 import math
