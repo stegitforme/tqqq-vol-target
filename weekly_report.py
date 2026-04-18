@@ -617,7 +617,7 @@ body{{background:#080a0e;color:#e8eaf0;font-family:-apple-system,BlinkMacSystemF
   </div>
 </div>
 </body>
-</html>"""eekly_report.py
+</html>"""
 # =========================
 # TQQQ Vol(35%) + 200MA Strategy — v6
 # Vol-targeting: size TQQQ to target 35% annualized portfolio vol
