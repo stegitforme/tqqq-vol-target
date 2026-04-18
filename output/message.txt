@@ -1,5 +1,16 @@
-TQQQ | Vol(35%)+200MA | 50% TQQQ | Vol20=70.2% | QQQ Above 200MA
-Date=2026-04-17  Mode=debug
-QQQ Close=$648.85  200MA=$598.89
-ABOVE 200MA — 50% TQQQ / 50% SGOV
-Vol (20d): 70.2%  (5d ago: 69.9%)  Guard: standby
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  GOGO TQQQ SIGNAL — 2026-04-17
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ALLOCATION:  50% TQQQ / 50% SGOV
+  ACTION:      HOLD — no meaningful change
+  PREVIOUS:    50%
+
+  200MA GATE:  ✓ ABOVE  (QQQ $648.85 / MA $598.89)
+  VOL (20d):   70.2%  (5d ago: 69.9%)
+  FORMULA:     35% ÷ 70.2% = 50%
+  GUARD:       Standby
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  https://stegitforme.github.io/tqqq-vol-target/reports/2026-04-17.html
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
