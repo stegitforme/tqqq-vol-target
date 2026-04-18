@@ -202,22 +202,24 @@ jobs:
 
           smtp_port = int(smtp_port_raw or "587")
           body = open(path, "r", encoding="utf-8").read()
-
-          msg = EmailMessage()
-          msg["From"]    = email_from
-          msg["To"]      = email_to
-          msg["Subject"] = subject
-          msg.set_content(body, charset="utf-8")
           html_path = "/tmp/email_html.html"
-          if os.path.exists(html_path):
-            html_body = open(html_path, "r", encoding="utf-8").read()
-            msg.add_alternative(html_body, subtype="html", charset="utf-8")
+          html_body = open(html_path, "r", encoding="utf-8").read() if os.path.exists(html_path) else None
 
+          # Send individually so each recipient sees only their own address
+          recipients = [r.strip() for r in email_to.split(",") if r.strip()]
           with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as s:
               s.ehlo()
               s.starttls()
               s.login(smtp_user, smtp_pass)
-              s.send_message(msg)
-
-          print("Email sent")
+              for recipient in recipients:
+                msg = EmailMessage()
+                msg["From"]    = email_from
+                msg["To"]      = recipient
+                msg["Subject"] = subject
+                msg.set_content(body, charset="utf-8")
+                if html_body:
+                  msg.add_alternative(html_body, subtype="html", charset="utf-8")
+                s.send_message(msg)
+                print(f"Email sent to {recipient}")
+          print(f"Done — {len(recipients)} recipient(s)")
           PY
