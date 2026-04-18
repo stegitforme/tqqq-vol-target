@@ -141,6 +141,7 @@ jobs:
             echo "Run:"
             echo "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } > /tmp/notify_body.txt
+          if [ -f "output/email_html.html" ]; then cp output/email_html.html /tmp/email_html.html; fi
 
           echo "REPORT_URL=$REPORT_URL" >> $GITHUB_ENV
           echo "SUBJECT=$SUBJECT" >> $GITHUB_ENV
@@ -207,6 +208,10 @@ jobs:
           msg["To"]      = email_to
           msg["Subject"] = subject
           msg.set_content(body, charset="utf-8")
+          html_path = "/tmp/email_html.html"
+          if os.path.exists(html_path):
+            html_body = open(html_path, "r", encoding="utf-8").read()
+            msg.add_alternative(html_body, subtype="html", charset="utf-8")
 
           with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as s:
               s.ehlo()
