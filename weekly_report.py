@@ -651,6 +651,103 @@ email_body = "\n".join([
 with open(OUTPUT_DIR / "message.txt", "w") as f:
     f.write(email_body)
 
+
+# ── HTML email body ─────────────────────────────────────────────────────────
+alloc_color  = '#00C853' if alloc_final_pct >= 80 else '#FFC107' if alloc_final_pct >= 40 else '#FF6D00'
+gate_bg      = '#0d1f0d' if above_200ma else '#1f0d0d'
+gate_border  = '#00C853' if above_200ma else '#FF1744'
+action_bg    = '#0d1f0d' if 'HOLD' in action_label else '#1f1500' if 'BUY' in action_label else '#1f0d0d'
+action_color = '#00C853' if 'HOLD' in action_label else '#FFC107' if 'BUY' in action_label else '#FF6D00'
+
+guard_email_html = ''
+if vol_accelerating:
+    guard_email_html = (
+        '<tr><td style="padding:0 0 16px 0;">'
+        '<div style="background:#1a1500;border:2px solid #FFC107;border-radius:8px;padding:16px;text-align:center;">'
+        '<div style="font-size:11px;color:#888;text-transform:uppercase;">Vol Acceleration Guard — ACTIVE</div>'
+        f'<div style="font-size:20px;font-weight:bold;color:#FFC107;">Allocation capped at {int(VOL_ACCEL_CAP*100)}% TQQQ</div>'
+        f'<div style="font-size:13px;color:#888;margin-top:6px;">Vol rose {vol_5d_pct:.1f}% to {vol_pct:.1f}%</div>'
+        '</div></td></tr>'
+    )
+elif above_200ma and vol_ann_5d_ago > 0:
+    accel_pct = (vol_ann / vol_ann_5d_ago - 1) * 100
+    guard_email_html = (
+        '<tr><td style="padding:0 0 16px 0;">'
+        '<div style="background:#111;border:1px solid #222;border-radius:8px;padding:12px;text-align:center;">'
+        '<div style="font-size:11px;color:#444;text-transform:uppercase;">Vol Accel Guard — Standby</div>'
+        f'<div style="font-size:12px;color:#555;margin-top:4px;">Vol {vol_5d_pct:.1f}% to {vol_pct:.1f}% ({accel_pct:+.0f}% in 5d)</div>'
+        '</div></td></tr>'
+    )
+
+ma_rows_html = ''
+for label, val, raw in [('50-day MA', ma50_str, ma50), ('100-day MA', ma100_str, ma100), ('200-day MA', ma200_str, ma200)]:
+    if val == 'N/A' or raw is None:
+        continue
+    dist = (qqq_close - raw) / raw * 100
+    dist_color = '#00C853' if dist > 0 else '#FF1744'
+    dist_str = f'+{dist:.1f}%' if dist > 0 else f'{dist:.1f}%'
+    ma_rows_html += (
+        f'<tr><td style="font-size:12px;color:#555;padding:4px 0;">{label}</td>'
+        f'<td style="font-size:12px;color:#888;text-align:right;">${val}</td>'
+        f'<td style="font-size:12px;color:{dist_color};text-align:right;width:70px;">{dist_str}</td></tr>'
+    )
+
+email_html = (
+    '<!DOCTYPE html><html>'
+    '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>'
+    '<body style="margin:0;padding:0;background:#0a0a0a;font-family:-apple-system,BlinkMacSystemFont,sans-serif;">'
+    '<table width="100%" cellpadding="0" cellspacing="0" style="background:#0a0a0a;padding:24px 16px;"><tr><td>'
+    '<table width="100%" cellpadding="0" cellspacing="0" style="max-width:580px;margin:0 auto;">'
+    '<tr><td style="padding:0 0 20px 0;">'
+    '<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+    '<td><span style="font-size:22px;font-weight:bold;color:#f0c040;">GOGO</span>'
+    '<span style="font-size:13px;color:#555;margin-left:8px;">TQQQ Vol-Targeting Signal</span></td>'
+    f'<td align="right"><span style="font-size:12px;color:#555;">{run_date_str}</span></td>'
+    '</tr></table>'
+    '<div style="height:2px;background:#f0c040;margin-top:8px;opacity:0.3;"></div>'
+    '</td></tr>'
+    '<tr><td style="padding:0 0 16px 0;">'
+    f'<div style="background:{gate_bg};border:1px solid {gate_border};border-radius:8px;padding:14px 16px;text-align:center;">'
+    f'<div style="font-size:13px;color:{gate_border};font-weight:600;">{gate_label}</div>'
+    f'<div style="font-size:12px;color:#666;margin-top:4px;">QQQ ${qqq_close:.2f} &nbsp;·&nbsp; 200MA ${ma200_str} &nbsp;·&nbsp; {ma_dist(qqq_close, ma200)}</div>'
+    '</div></td></tr>'
+    '<tr><td style="padding:0 0 16px 0;">'
+    '<div style="background:#111;border:1px solid #222;border-radius:8px;padding:20px;text-align:center;">'
+    '<div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">This Week\'s Allocation</div>'
+    f'<div style="font-size:56px;font-weight:900;color:{alloc_color};line-height:1;">{alloc_final_pct}%</div>'
+    f'<div style="font-size:18px;color:#888;margin-top:4px;">TQQQ &nbsp;/&nbsp; <span style="color:#4da6ff;">{cash_pct}% SGOV</span></div>'
+    '<div style="height:8px;background:#1a1a1a;border-radius:4px;margin:14px 0 8px 0;overflow:hidden;">'
+    f'<div style="height:100%;width:{alloc_final_pct}%;background:{alloc_color};border-radius:4px;"></div></div>'
+    f'<div style="background:{action_bg};border-radius:6px;padding:8px 16px;margin-top:8px;">'
+    f'<span style="font-size:14px;font-weight:700;color:{action_color};">{action_label}</span></div>'
+    f'<div style="font-size:12px;color:#444;margin-top:8px;">Previous: {prev_str}</div>'
+    '</div></td></tr>'
+    '<tr><td style="padding:0 0 16px 0;">'
+    '<div style="background:#111;border:1px solid #1a1a1a;border-radius:8px;padding:14px 16px;">'
+    '<div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;">Vol Sizing</div>'
+    '<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+    f'<td style="text-align:center;padding:8px;"><div style="font-size:22px;font-weight:700;color:#e8e8e8;">{vol_pct:.1f}%</div><div style="font-size:11px;color:#555;">20d Vol</div></td>'
+    '<td style="text-align:center;color:#333;font-size:20px;">÷</td>'
+    f'<td style="text-align:center;padding:8px;"><div style="font-size:22px;font-weight:700;color:#e8e8e8;">{int(TARGET_VOL*100)}%</div><div style="font-size:11px;color:#555;">Target</div></td>'
+    '<td style="text-align:center;color:#333;font-size:20px;">=</td>'
+    f'<td style="text-align:center;padding:8px;"><div style="font-size:22px;font-weight:700;color:{alloc_color};">{alloc_final_pct}%</div><div style="font-size:11px;color:#555;">TQQQ</div></td>'
+    '</tr></table>'
+    f'<div style="font-size:11px;color:#444;margin-top:8px;text-align:center;">5d ago: {vol_5d_pct:.1f}% &nbsp;·&nbsp; RSI {rsi_str} &nbsp;·&nbsp; MACD <span style="color:{macd_color};">{macd_str}</span></div>'
+    '</div></td></tr>'
+    + guard_email_html +
+    '<tr><td style="padding:0 0 16px 0;">'
+    '<div style="background:#111;border:1px solid #1a1a1a;border-radius:8px;padding:14px 16px;">'
+    '<div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;">QQQ Moving Averages</div>'
+    f'<table width="100%" cellpadding="0" cellspacing="6">{ma_rows_html}</table>'
+    '</div></td></tr>'
+    '<tr><td style="padding:0 0 20px 0;text-align:center;">'
+    f'<a href="{report_url}" style="display:inline-block;background:#f0c040;color:#0a0a0a;font-size:14px;font-weight:700;padding:12px 32px;border-radius:6px;text-decoration:none;">Open Full Report</a>'
+    '</td></tr>'
+    '<tr><td style="border-top:1px solid #1a1a1a;padding-top:16px;text-align:center;">'
+    f'<div style="font-size:11px;color:#333;line-height:1.7;">Strategy: Vol({int(TARGET_VOL*100)}%) + 200MA Gate + Vol Accel Guard<br>Runs every Friday after close &nbsp;·&nbsp; Act Monday morning<br>Generated {run_date_str} &nbsp;·&nbsp; Mode: {MODE}</div>'
+    '</td></tr>'
+    '</table></td></tr></table></body></html>'
+)
 # Write HTML email
 with open(OUTPUT_DIR / "email_html.html", "w") as f:
     f.write(email_html)
