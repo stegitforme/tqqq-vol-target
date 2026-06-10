@@ -102,6 +102,29 @@ jobs:
           MODE: ${{ env.MODE }}
           DEBUG_RUN: ${{ env.DEBUG_RUN }}
 
+      - name: Authenticate to Google Cloud (WIF / OIDC)
+        if: env.DEBUG_RUN == '0'
+        id: gcp-auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SIGNAL_WRITER_SA }}
+          token_format: 'access_token'
+
+      - name: Publish signal to RTDB (official / non-debug only)
+        if: env.DEBUG_RUN == '0'
+        run: |
+          set -e
+          TOKEN="${{ steps.gcp-auth.outputs.access_token }}"
+          if [ -z "$TOKEN" ]; then echo "No access token from auth step"; exit 1; fi
+          if [ ! -f signals/tqqq_vol_latest.json ]; then echo "signal file missing"; exit 1; fi
+          HTTP=$(curl -s -o /tmp/put_resp.json -w '%{http_code}' \
+            -X PUT -H 'Content-Type: application/json' \
+            --data @signals/tqqq_vol_latest.json \
+            "https://gogo-trading-81293-default-rtdb.firebaseio.com/signals/tqqq_vol/latest.json?access_token=$TOKEN")
+          echo "RTDB PUT HTTP $HTTP"; cat /tmp/put_resp.json
+          [ "$HTTP" = "200" ] || { echo "PUT failed (HTTP $HTTP)"; exit 1; }
+
       - name: Commit updated data + report
         run: |
           git config user.name "github-actions"

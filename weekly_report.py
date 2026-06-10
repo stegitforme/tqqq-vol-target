@@ -960,6 +960,28 @@ if MODE == "official":
     _ = upsert_history_row(HISTORY_OFFICIAL_PATH, row)
 
 # -------------------------
+# Signal feed (Step 3 producer) — emit machine-readable signal for the
+# gt-platform consumer. File is published to RTDB by friday_report.yml
+# (official runs only). Section 2 is the AUTHORITATIVE compute that writes
+# the published report/email, so the signal co-locates with it here.
+# -------------------------
+signal = {
+    "schemaVersion":  1,
+    "allocTQQQ":      alloc_final,
+    "allocCash":      cash_final,
+    "realizedVol20d": vol_ann,
+    "ma200Gate":      above_200ma,
+    "volGuard":       vol_accelerating,
+    "runDate":        run_date_str,
+    "mode":           MODE,
+    "targetVol":      TARGET_VOL,
+}
+SIGNAL_PATH = Path("signals/tqqq_vol_latest.json")
+SIGNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+SIGNAL_PATH.write_text(json.dumps(signal, indent=2))
+print(f"[SIGNAL] wrote {SIGNAL_PATH} (mode={MODE}, allocTQQQ={alloc_final}, runDate={run_date_str})")
+
+# -------------------------
 # Previous allocation
 # -------------------------
 prev_alloc = None
