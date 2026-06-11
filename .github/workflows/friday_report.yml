@@ -103,7 +103,7 @@ jobs:
           DEBUG_RUN: ${{ env.DEBUG_RUN }}
 
       - name: Authenticate to Google Cloud (WIF / OIDC)
-        if: env.DEBUG_RUN == '0'
+        if: github.event_name == 'schedule'
         id: gcp-auth
         uses: google-github-actions/auth@v2
         with:
@@ -112,8 +112,8 @@ jobs:
           token_format: 'access_token'
           access_token_scopes: 'https://www.googleapis.com/auth/firebase.database,https://www.googleapis.com/auth/userinfo.email'
 
-      - name: Publish signal to RTDB (official / non-debug only)
-        if: env.DEBUG_RUN == '0'
+      - name: Publish signal to RTDB (scheduled only)
+        if: github.event_name == 'schedule'
         run: |
           set -e
           TOKEN="${{ steps.gcp-auth.outputs.access_token }}"
@@ -127,6 +127,7 @@ jobs:
           [ "$HTTP" = "200" ] || { echo "PUT failed (HTTP $HTTP)"; exit 1; }
 
       - name: Commit updated data + report
+        if: github.event_name == 'schedule'
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
@@ -142,14 +143,17 @@ jobs:
           git push
 
       - name: Upload Pages artifact
+        if: github.event_name == 'schedule'
         uses: actions/upload-pages-artifact@v3
         with:
           path: output
 
       - name: Deploy to GitHub Pages
+        if: github.event_name == 'schedule'
         uses: actions/deploy-pages@v4
 
       - name: Prepare notification text
+        if: github.event_name == 'schedule'
         run: |
           set -e
           REPORT_URL="$(cat output/latest_report_url.txt)"
@@ -171,7 +175,7 @@ jobs:
           echo "SUBJECT=$SUBJECT" >> $GITHUB_ENV
 
       - name: Send Pushover notification
-        if: always()
+        if: github.event_name == 'schedule'
         env:
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
@@ -191,7 +195,7 @@ jobs:
             https://api.pushover.net/1/messages.json
 
       - name: Send email (SMTP)
-        if: always()
+        if: github.event_name == 'schedule'
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
