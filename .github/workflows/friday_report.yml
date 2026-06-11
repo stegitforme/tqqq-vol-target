@@ -110,6 +110,7 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_SIGNAL_WRITER_SA }}
           token_format: 'access_token'
+          access_token_scopes: 'https://www.googleapis.com/auth/firebase.database,https://www.googleapis.com/auth/userinfo.email'
 
       - name: Publish signal to RTDB (official / non-debug only)
         if: env.DEBUG_RUN == '0'
