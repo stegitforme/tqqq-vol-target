@@ -1,16 +1,16 @@
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  GOGO TQQQ SIGNAL — 2026-06-26
+  GOGO TQQQ SIGNAL — 2026-07-02
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   ALLOCATION:  35% TQQQ / 65% SGOV
-  ACTION:      SELL / REDUCE — decrease TQQQ
-  PREVIOUS:    40%
+  ACTION:      HOLD — no meaningful change
+  PREVIOUS:    35%
 
-  200MA GATE:  ✓ ABOVE  (QQQ $706.52 / MA $632.15)
-  VOL (20d):   95.6%  (5d ago: 89.1%)
-  FORMULA:     35% ÷ 95.6% = 35%
+  200MA GATE:  ✓ ABOVE  (QQQ $712.6 / MA $634.93)
+  VOL (20d):   103.3%  (5d ago: 95.3%)
+  FORMULA:     35% ÷ 103.3% = 35%
   GUARD:       Standby
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  https://stegitforme.github.io/tqqq-vol-target/reports/2026-06-26.html
+  https://stegitforme.github.io/tqqq-vol-target/reports/2026-07-02.html
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
