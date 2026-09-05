@@ -22,9 +22,12 @@ on:
         type: boolean
 
   schedule:
-    # Run after Friday close so Yahoo data is definitely updated.
-    # 01:10 UTC Saturday = 8:10pm ET Friday = 5:10pm PT Friday
-    - cron: "10 1 * * 6"
+    # TQQQ-PUB-001 — 02:10 UTC Saturday = 9:10pm ET Friday = 6:10pm PT Friday.
+    # The previous comment claimed Yahoo is "definitely updated" by 5:10pm PT. On 2026-09-04 it was
+    # not: the run fetched bars ending THURSDAY and published Thursday's signal as Friday's. This
+    # hour of extra settlement margin sits BEHIND the freshness gate and is not the fix — the gate
+    # is. (The gate would have caught that run at the old time too; see freshness_gate.py.)
+    - cron: "10 2 * * 6"
 
 permissions:
   contents: write
@@ -44,7 +47,13 @@ jobs:
 
     steps:
       - name: Checkout repo
+        # TQQQ-PUB-001 — ref: main + full history. A "Re-run all jobs" checks out the run's ORIGINAL
+        # SHA by default, which is how the 2026-09-05 repair attempt died: it was based on a commit
+        # that predated Friday night's data commit, so its push was rejected non-fast-forward.
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
       - name: Decide run mode
         id: mode
@@ -93,17 +102,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Fetch price data
+        run: python fetch_tqqq.py
+
+      # TQQQ-PUB-001 TASK 1 — THE FRESHNESS GATE. Between the fetch and the report, deliberately:
+      # every publish step below is downstream of it, so a nonzero exit here means NOTHING is
+      # published — no history row, no RTDB PUT, no Pages deploy, no success notification.
+      # A RED RUN BEATS A GREEN RUN THAT LIED.
+      - name: Freshness gate (official runs)
+        run: python freshness_gate.py
+        env:
+          ASOF_DATE: ${{ env.ASOF_DATE }}
+          MODE: ${{ env.MODE }}
+
       - name: Run weekly report
-        run: |
-          python fetch_tqqq.py
-          python weekly_report.py
+        run: python weekly_report.py
         env:
           ASOF_DATE: ${{ env.ASOF_DATE }}
           MODE: ${{ env.MODE }}
           DEBUG_RUN: ${{ env.DEBUG_RUN }}
 
       - name: Authenticate to Google Cloud (WIF / OIDC)
-        if: github.event_name == 'schedule'
+        if: env.MODE == 'official'
         id: gcp-auth
         uses: google-github-actions/auth@v2
         with:
@@ -112,8 +132,8 @@ jobs:
           token_format: 'access_token'
           access_token_scopes: 'https://www.googleapis.com/auth/firebase.database,https://www.googleapis.com/auth/userinfo.email'
 
-      - name: Publish signal to RTDB (scheduled only)
-        if: github.event_name == 'schedule'
+      - name: Publish signal to RTDB (official runs)
+        if: env.MODE == 'official'
         run: |
           set -e
           TOKEN="${{ steps.gcp-auth.outputs.access_token }}"
@@ -126,9 +146,19 @@ jobs:
           echo "RTDB PUT HTTP $HTTP"; cat /tmp/put_resp.json
           [ "$HTTP" = "200" ] || { echo "PUT failed (HTTP $HTTP)"; exit 1; }
 
+      # TQQQ-PUB-001 TASK 6 — RUNDATE SEMANTICS, ONCE, HERE.
+      #   RunDate  = the date of the NEWEST BAR the signal was computed from. For an official run
+      #              TASK 1's gate guarantees that is the target trading day (the Friday), because a
+      #              run whose newest bar is older EXITS before reaching this step.
+      #   The COMMIT's own date is `date -u` at commit time, which for a Friday-evening PT run is
+      #              already SATURDAY in UTC. So "Official TQQQ vol report (2026-09-05)" naming a
+      #              row whose RunDate is 2026-09-04 is CORRECT and expected — the two dates answer
+      #              different questions. The 2026-09-04 incident looked like this in the log and was
+      #              a genuinely different failure: the newest BAR was Thursday.
       - name: Commit updated data + report
-        if: github.event_name == 'schedule'
+        if: env.MODE == 'official'
         run: |
+          set -e
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
@@ -140,20 +170,46 @@ jobs:
             git commit -m "Official TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes to commit"
           fi
 
-          git push
+          # TQQQ-PUB-001 TASK 5 — INTEGRATE BEFORE PUSHING. A re-run based on an older SHA, or any
+          # commit that landed while this job was computing, would otherwise be rejected
+          # non-fast-forward — which is exactly how the 2026-09-05 repair attempt died with the
+          # report generated and nothing published.
+          #
+          # ON CONFLICT WE FAIL LOUDLY AND STOP. history.csv is append-mostly, so a conflict means
+          # two runs appended for overlapping dates, and NO automatic resolution is trustworthy:
+          # "ours" silently drops the other run's row, "theirs" silently drops this one's, and a
+          # union can interleave dates. A human must look. The gate has already guaranteed nothing
+          # false was computed, so stopping here costs a publish, not correctness.
+          for attempt in 1 2 3; do
+            if git pull --rebase origin main; then
+              if git push origin HEAD:main; then
+                echo "pushed on attempt $attempt"
+                exit 0
+              fi
+              echo "push rejected on attempt $attempt (a concurrent commit landed) — retrying"
+            else
+              git rebase --abort || true
+              echo "::error::TQQQ-PUB-001: rebase CONFLICT while integrating with origin/main."
+              echo "::error::Almost certainly overlapping appends in logs/history.csv."
+              echo "::error::NOT auto-resolving: every automatic choice silently drops a row. Resolve by hand."
+              exit 1
+            fi
+          done
+          echo "::error::TQQQ-PUB-001: push still rejected after 3 attempts."
+          exit 1
 
       - name: Upload Pages artifact
-        if: github.event_name == 'schedule'
+        if: env.MODE == 'official'
         uses: actions/upload-pages-artifact@v3
         with:
           path: output
 
       - name: Deploy to GitHub Pages
-        if: github.event_name == 'schedule'
+        if: env.MODE == 'official'
         uses: actions/deploy-pages@v4
 
       - name: Prepare notification text
-        if: github.event_name == 'schedule'
+        if: env.MODE == 'official'
         run: |
           set -e
           REPORT_URL="$(cat output/latest_report_url.txt)"
@@ -175,7 +231,7 @@ jobs:
           echo "SUBJECT=$SUBJECT" >> $GITHUB_ENV
 
       - name: Send Pushover notification
-        if: github.event_name == 'schedule'
+        if: env.MODE == 'official'
         env:
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
@@ -195,7 +251,7 @@ jobs:
             https://api.pushover.net/1/messages.json
 
       - name: Send email (SMTP)
-        if: github.event_name == 'schedule'
+        if: env.MODE == 'official'
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -251,3 +307,30 @@ jobs:
                 print(f"Email sent to {recipient}")
           print(f"Done — {len(recipients)} recipient(s)")
           PY
+
+      # TQQQ-PUB-001 TASK 3 — LOUD FAILURE. Without this a failed official run is silent until the
+      # GT-platform Saturday watchdog notices, which is up to a day later. That watchdog stays as
+      # the backstop; this is the first line. Deliberately `always()`-free: it fires only on
+      # failure, and only for a run that was going to publish.
+      - name: Notify on failure (official runs)
+        if: failure() && env.MODE == 'official'
+        env:
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+        run: |
+          if [ -z "$PUSHOVER_USER_KEY" ] || [ -z "$PUSHOVER_API_TOKEN" ]; then
+            echo "Skipping Pushover (missing secrets)"; exit 0
+          fi
+          newest() { [ -f "$1" ] && tail -n 1 "$1" | cut -d, -f1 || echo "MISSING"; }
+          TQ="$(newest data/TQQQ.csv)"; QQ="$(newest data/QQQ.csv)"
+          BODY="TQQQ weekly OFFICIAL run FAILED - nothing published for $(date -u +%Y-%m-%d).
+          Newest bars: TQQQ $TQ / QQQ $QQ.
+          Re-run from Actions once data settles:
+          https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          curl -s \
+            --form-string "token=$PUSHOVER_API_TOKEN" \
+            --form-string "user=$PUSHOVER_USER_KEY" \
+            --form-string "title=TQQQ weekly run FAILED" \
+            --form-string "message=$BODY" \
+            --form-string "priority=1" \
+            https://api.pushover.net/1/messages.json
