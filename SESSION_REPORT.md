@@ -1,4 +1,83 @@
-# SESSION REPORT — TQQQ-PUB-001 (freshness gate, publish-on-official, re-run survival)
+# SESSION REPORT — TQQQ-PUB-001 + 001b (freshness gate, publish-on-official, re-run survival)
+
+# ══ PART B — TQQQ-PUB-001b: the pull must survive the fetch's own unstaged file ══
+
+## B1. Outcome
+**SHIPPED to branch `fix/pub-001b-autostash`** (off `main` at `9ec51e1`, where PUB-001 is merged).
+All four tasks done. **Committed on the branch only — not merged, not pushed.**
+Files: `.github/workflows/friday_report.yml`, `freshness_gate.py` (self-test extended).
+
+## B2. The diagnosis, confirmed in the repo before changing anything
+```
+git ls-files data/   → data/QQQ.csv  data/TQQQ.csv   ← BOTH tracked
+commit step add list → output/ logs/history.csv logs/history_official.csv data/QQQ.csv
+                                                     ← TQQQ.csv absent
+```
+`fetch_tqqq.py` rewrites **both** CSVs. PUB-001 staged one of the two siblings the same command
+rewrites, so `data/TQQQ.csv` was left modified-but-unstaged and `git pull --rebase` **refused to
+start**. My PUB-001 handler then called that a conflict and blind-fired `git rebase --abort`,
+producing `fatal: no rebase in progress` and telling a human to resolve a conflict that never
+existed. **A refusal and a conflict are opposite problems, and PUB-001 conflated them. That was my
+bug.**
+
+## B3. What each task did
+1. **STAGE BOTH CSVs** — `data/TQQQ.csv` added to the official *and* debug `git add` lists.
+2. **`--autostash`** — belt and suspenders. TASK 1 makes today's case impossible by construction;
+   autostash means any *future* unstaged leftover stashes across the rebase instead of turning a
+   publishable run red.
+3. **DIAGNOSE, DON'T ASSUME** — the handler now aborts only when git says a rebase is actually in
+   progress (`.git/rebase-merge` / `.git/rebase-apply`), names the conflicted paths from
+   `--diff-filter=U`, and has a **separate** branch for a refused pull that says plainly "this is
+   NOT a conflict and there is nothing to hand-resolve", dumps `git status --porcelain`, and points
+   at the `git add` list. A third branch covers "neither", rather than mislabelling it.
+4. **SELF-TEST EXTENDED** — see B4.
+
+## B4. Verification — the shipped script, not a copy of it
+`python freshness_gate.py --self-test` now runs **27/27 freshness + 18/18 publish**. The publish
+section **extracts the commit step's shell out of the workflow YAML** and runs it against throwaway
+git repos (bare origin + clone). Testing a re-typed copy would have proved nothing about the script
+that ships; extraction is why these fixtures can fail.
+
+```
+[4] the publish sequence — run #108's exact shape
+  ok  the commit+pull+push sequence SUCCEEDS (run #108 exited 1 here)
+  ok  the pull is no longer refused for a dirty tree
+  ok  and `fatal: no rebase in progress` never appears
+  ok  the new history row reached origin
+  ok  and so did data/TQQQ.csv — the sibling PUB-001 left behind
+  ok  a tracked-but-unstaged file no longer refuses the pull (--autostash)
+  ok  with the leftover restored into the tree, not swallowed by the stash
+  ok  a genuine overlapping append HALTS · diagnosed as a conflict · naming logs/history.csv
+  ok  and NOT the dirty-tree diagnosis — the two are told apart
+  ok  origin is left untouched — nothing was silently resolved
+```
+
+**Negative tests — three, all genuinely red, all restored:**
+```
+NEG 1  un-stage data/TQQQ.csv (the run #108 bug)   → FAIL: TQQQ.csv never reaches origin; tree left dirty
+NEG 2  ALSO drop --autostash                        → FAIL: the sequence exits 1 — run #108 reproduced exactly
+NEG 3  restore the blind abort + conflict-always    → FAIL: a real conflict is no longer diagnosed as one
+```
+**NEG 1 alone does not break the push — and that is the design, not a weak test.** With TASK 1
+reverted, `--autostash` still rescues the run; only removing *both* (NEG 2) reproduces the original
+failure. Belt and suspenders, each independently load-bearing.
+
+## B5. For the verifier
+- **Not merged, not pushed.** Branch `fix/pub-001b-autostash`.
+- **THE REPAIR RUN** (after merge): Actions → Run workflow → `mode=official`, `force_official=true`,
+  `asof` blank. Expect full green: `logs/history.csv` newest row **RunDate 2026-09-04, alloc 0.90,
+  vol ≈ 0.386**, Pages deployed, normal Pushover.
+- **State to expect going in:** run #108 pushed nothing, so `origin/main` still shows Thursday's row
+  while **RTDB already carries the correct Friday signal** (its PUT succeeded before the failure).
+  The repair run realigns them. Its `git pull --rebase` will pull the merge commit — no conflict is
+  expected, since #108's local commit was never pushed.
+- **Unchanged from PART A and still true:** `weekly_report.py` contains the entire script twice
+  (§6 below) — reported, not fixed, and not touched by this ticket.
+
+---
+
+# ══ PART A — TQQQ-PUB-001 (as shipped in 9ec51e1) ══
+
 
 ## 1. Outcome
 **TQQQ-PUB-001 — SHIPPED to branch `fix/pub-001-freshness-gate`.** All six tasks done. **Committed on
