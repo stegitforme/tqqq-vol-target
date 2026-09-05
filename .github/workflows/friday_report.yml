@@ -162,11 +162,16 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
+          # TQQQ-PUB-001b TASK 1 — STAGE BOTH FETCHED CSVs. fetch_tqqq.py rewrites data/TQQQ.csv AND
+          # data/QQQ.csv, and BOTH are tracked. PUB-001 staged only QQQ.csv, so TQQQ.csv was left
+          # modified-but-unstaged and `git pull --rebase` REFUSED to run at all ("cannot pull with
+          # rebase: You have unstaged changes"). Committing one of two siblings the same command
+          # rewrites is what dirtied the tree.
           if [ "$DEBUG_RUN" = "1" ]; then
-            git add output/ logs/history.csv data/QQQ.csv || true
+            git add output/ logs/history.csv data/TQQQ.csv data/QQQ.csv || true
             git commit -m "Debug TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes to commit"
           else
-            git add output/ logs/history.csv logs/history_official.csv data/QQQ.csv || true
+            git add output/ logs/history.csv logs/history_official.csv data/TQQQ.csv data/QQQ.csv || true
             git commit -m "Official TQQQ vol report ($(date -u +%Y-%m-%d))" || echo "No changes to commit"
           fi
 
@@ -180,22 +185,52 @@ jobs:
           # "ours" silently drops the other run's row, "theirs" silently drops this one's, and a
           # union can interleave dates. A human must look. The gate has already guaranteed nothing
           # false was computed, so stopping here costs a publish, not correctness.
+          #
+          # TQQQ-PUB-001b TASK 2 — --autostash: belt AND suspenders. TASK 1 makes today's dirty-tree
+          # case impossible by construction, but any FUTURE unstaged leftover (a new fetch artifact,
+          # a stray log) would refuse the pull exactly the same way. Autostash carries it across the
+          # rebase instead of turning a publishable run into a red one.
+          #
+          # TQQQ-PUB-001b TASK 3 — DIAGNOSE, DON'T ASSUME. PUB-001's handler called every pull
+          # failure a "rebase CONFLICT" and blind-fired `git rebase --abort`, which on run #108
+          # printed `fatal: no rebase in progress` and told a human to hand-resolve a conflict that
+          # did not exist. The real cause was a REFUSAL — the pull never started. These are opposite
+          # problems and they now read differently.
           for attempt in 1 2 3; do
-            if git pull --rebase origin main; then
+            if git pull --rebase --autostash origin main > /tmp/pull.log 2>&1; then
+              cat /tmp/pull.log
               if git push origin HEAD:main; then
                 echo "pushed on attempt $attempt"
                 exit 0
               fi
               echo "push rejected on attempt $attempt (a concurrent commit landed) — retrying"
             else
-              git rebase --abort || true
-              echo "::error::TQQQ-PUB-001: rebase CONFLICT while integrating with origin/main."
-              echo "::error::Almost certainly overlapping appends in logs/history.csv."
-              echo "::error::NOT auto-resolving: every automatic choice silently drops a row. Resolve by hand."
+              cat /tmp/pull.log
+              # A rebase is only IN PROGRESS if git says so. Abort only then, so `fatal: no rebase in
+              # progress` can never appear inside a diagnosis again.
+              if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+                CONFLICTS="$(git diff --name-only --diff-filter=U | tr '\n' ' ')"
+                git rebase --abort || true
+                echo "::error::TQQQ-PUB-001: genuine rebase CONFLICT integrating with origin/main."
+                echo "::error::Conflicted paths: ${CONFLICTS:-unknown}"
+                echo "::error::history.csv is append-mostly, so this means two runs appended over overlapping dates."
+                echo "::error::NOT auto-resolving: every automatic choice silently drops a row. Resolve by hand."
+                exit 1
+              fi
+              if grep -qi "unstaged changes\|cannot pull with rebase\|local changes" /tmp/pull.log; then
+                echo "::error::TQQQ-PUB-001b: the pull REFUSED TO START — the working tree was dirty."
+                echo "::error::This is NOT a conflict and there is nothing to hand-resolve."
+                echo "::error::Untracked/unstaged leftovers:"
+                git status --porcelain || true
+                echo "::error::Fix: add the offending path to the commit step's \`git add\` list (see TASK 1)."
+                exit 1
+              fi
+              echo "::error::TQQQ-PUB-001: the pull failed for a reason that is neither a conflict nor a dirty tree."
+              echo "::error::Full pull output is above — read it rather than assuming."
               exit 1
             fi
           done
-          echo "::error::TQQQ-PUB-001: push still rejected after 3 attempts."
+          echo "::error::TQQQ-PUB-001: push still rejected after 3 attempts (persistent concurrent writer)."
           exit 1
 
       - name: Upload Pages artifact

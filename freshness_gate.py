@@ -28,6 +28,14 @@ publish step downstream (history commit, RTDB PUT, Pages, notification) never ru
     this gate must not out-vote it.
   - MODE != official ⇒ skipped. Debug runs publish nothing, so there is nothing to protect.
 
+THIS FILE IS ALSO THE REPO'S SELF-CHECK ENTRY POINT
+---------------------------------------------------
+`python freshness_gate.py --self-test` runs the freshness checks AND (TQQQ-PUB-001b) the publish
+sequence checks. One command, because two would mean one nobody remembers to run. The publish
+section EXTRACTS the commit step's shell out of .github/workflows/friday_report.yml and runs it
+against a throwaway git repo — testing a re-typed copy of that script would prove nothing about the
+script that actually ships.
+
 WHY THE GATE, NOT THE SCHEDULE, IS THE FIX
 ------------------------------------------
 The companion schedule change (01:10Z → 02:10Z) buys an hour of settlement margin. It is NOT the
@@ -337,5 +345,158 @@ def self_test() -> int:
     return 1 if fails else 0
 
 
+# ---------------------------------------------------------------------------
+# TQQQ-PUB-001b — THE PUBLISH SEQUENCE, EXERCISED AGAINST A REAL GIT REPO
+#
+# Run #108 failed at the last step: data/TQQQ.csv is tracked and rewritten by the fetch, but the
+# commit step staged only data/QQQ.csv, so the tree was dirty and `git pull --rebase` REFUSED to
+# start. The handler then called that a "rebase CONFLICT" and blind-fired `git rebase --abort`,
+# printing `fatal: no rebase in progress` and telling a human to resolve a conflict that never
+# existed. A refusal and a conflict are opposite problems; these fixtures pin both.
+# ---------------------------------------------------------------------------
+WORKFLOW = BASE / ".github" / "workflows" / "friday_report.yml"
+
+
+def extract_commit_step(path: Path = WORKFLOW) -> str:
+    """Pull the commit step's shell out of the workflow verbatim. No YAML parser: pyyaml is not a
+    dependency of this repo and adding one to read one string would be a poor trade."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    try:
+        i = next(i for i, l in enumerate(lines) if l.strip() == "- name: Commit updated data + report")
+        j = next(j for j in range(i, len(lines)) if lines[j].strip() == "run: |")
+    except StopIteration:
+        raise RuntimeError("commit step not found — the workflow was renamed; fix this extractor")
+    body, indent = [], None
+    for l in lines[j + 1:]:
+        if not l.strip():
+            body.append("")
+            continue
+        cur = len(l) - len(l.lstrip())
+        if indent is None:
+            indent = cur
+        if cur < indent:
+            break
+        body.append(l[indent:])
+    return "\n".join(body).rstrip() + "\n"
+
+
+def publish_self_test() -> int:
+    import shutil
+    import subprocess
+    import tempfile
+
+    n, fails = 0, []
+
+    def ok(cond, msg):
+        nonlocal n
+        n += 1
+        print(("  ok   " if cond else "  FAIL ") + msg)
+        if not cond:
+            fails.append(msg)
+
+    script = extract_commit_step()
+    ok("data/TQQQ.csv" in script, "the shipped commit step stages data/TQQQ.csv (TASK 1)")
+    ok("--autostash" in script, "and pulls with --autostash (TASK 2)")
+
+    def git(*a, cwd, check=True):
+        return subprocess.run(["git", *a], cwd=cwd, check=check, capture_output=True, text=True)
+
+    def build():
+        """A bare origin + a clone that looks like the runner's tree after fetch+report."""
+        root = Path(tempfile.mkdtemp())
+        origin, work = root / "origin.git", root / "work"
+        subprocess.run(["git", "init", "--bare", "-b", "main", str(origin)], check=True, capture_output=True)
+        subprocess.run(["git", "clone", str(origin), str(work)], check=True, capture_output=True)
+        git("config", "user.email", "t@t", cwd=work)
+        git("config", "user.name", "t", cwd=work)
+        for d in ("data", "logs", "output"):
+            (work / d).mkdir(parents=True, exist_ok=True)
+        (work / "data" / "TQQQ.csv").write_text("Date,Close\n2026-09-03,49.0\n")
+        (work / "data" / "QQQ.csv").write_text("Date,Close\n2026-09-03,717.0\n")
+        (work / "logs" / "history.csv").write_text("RunDate,x\n2026-08-28,1\n")
+        (work / "logs" / "history_official.csv").write_text("RunDate,x\n2026-08-28,1\n")
+        (work / "output" / ".keep").write_text("")
+        (work / "README.md").write_text("readme\n")
+        git("add", "-A", cwd=work)
+        git("commit", "-m", "seed", cwd=work)
+        git("push", "origin", "main", cwd=work)
+        return root, origin, work
+
+    def run_step(work):
+        env = {**os.environ, "DEBUG_RUN": "0", "MODE": "official", "HOME": str(work)}
+        return subprocess.run(["bash", "-c", script], cwd=work, env=env, capture_output=True, text=True)
+
+    # ── A) the run #108 shape: the fetch rewrites BOTH CSVs, the report appends a row ──────────
+    print("\n[4] the publish sequence — run #108's exact shape")
+    root, origin, work = build()
+    try:
+        (work / "data" / "TQQQ.csv").write_text("Date,Close\n2026-09-03,49.0\n2026-09-04,49.9\n")
+        (work / "data" / "QQQ.csv").write_text("Date,Close\n2026-09-03,717.0\n2026-09-04,719.9\n")
+        (work / "logs" / "history.csv").write_text("RunDate,x\n2026-08-28,1\n2026-09-04,2\n")
+        (work / "logs" / "history_official.csv").write_text("RunDate,x\n2026-08-28,1\n2026-09-04,2\n")
+        r = run_step(work)
+        out = r.stdout + r.stderr
+        ok(r.returncode == 0, "the commit+pull+push sequence SUCCEEDS (run #108 exited 1 here)")
+        ok("cannot pull with rebase" not in out, "the pull is no longer refused for a dirty tree")
+        ok("no rebase in progress" not in out, "and `fatal: no rebase in progress` never appears")
+        pushed = git("show", "origin/main:logs/history.csv", cwd=work).stdout
+        ok("2026-09-04" in pushed, "the new history row reached origin")
+        tq = git("show", "origin/main:data/TQQQ.csv", cwd=work).stdout
+        ok("2026-09-04" in tq, "and so did data/TQQQ.csv — the sibling PUB-001 left behind")
+        ok(git("status", "--porcelain", cwd=work).stdout.strip() == "", "the tree is left clean")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # ── B) TASK 2's suspenders: a tracked file the add list does NOT cover ────────────────────
+    root, origin, work = build()
+    try:
+        (work / "logs" / "history.csv").write_text("RunDate,x\n2026-08-28,1\n2026-09-04,2\n")
+        (work / "logs" / "history_official.csv").write_text("RunDate,x\n2026-08-28,1\n2026-09-04,2\n")
+        # README.md is tracked and is in NO `git add` list — the future-leftover case.
+        (work / "README.md").write_text("readme\nan unstaged leftover the add list does not cover\n")
+        r = run_step(work)
+        out = r.stdout + r.stderr
+        ok(r.returncode == 0, "a tracked-but-unstaged file no longer refuses the pull (--autostash)")
+        ok("2026-09-04" in git("show", "origin/main:logs/history.csv", cwd=work).stdout,
+           "and the row still reaches origin")
+        ok("an unstaged leftover" in (work / "README.md").read_text(),
+           "with the leftover restored into the tree, not swallowed by the stash")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # ── C) a GENUINE conflict must still halt, and say so accurately ──────────────────────────
+    root, origin, work = build()
+    try:
+        other = root / "other"
+        subprocess.run(["git", "clone", str(origin), str(other)], check=True, capture_output=True)
+        git("config", "user.email", "o@o", cwd=other)
+        git("config", "user.name", "o", cwd=other)
+        (other / "logs" / "history.csv").write_text("RunDate,x\n2026-08-28,1\n2026-09-04,THEIRS\n")
+        git("add", "-A", cwd=other)
+        git("commit", "-m", "concurrent append", cwd=other)
+        git("push", "origin", "main", cwd=other)
+        # ours appends a DIFFERENT row at the same place → a real content conflict on rebase
+        (work / "logs" / "history.csv").write_text("RunDate,x\n2026-08-28,1\n2026-09-04,OURS\n")
+        r = run_step(work)
+        out = r.stdout + r.stderr
+        ok(r.returncode == 1, "a genuine overlapping append HALTS")
+        ok("genuine rebase CONFLICT" in out, "and is diagnosed as a conflict")
+        ok("logs/history.csv" in out, "naming the conflicted path")
+        ok("Resolve by hand" in out, "with the hand-resolve instruction")
+        ok("no rebase in progress" not in out, "and no `fatal: no rebase in progress` noise")
+        ok("the pull REFUSED TO START" not in out, "and NOT the dirty-tree diagnosis — the two are told apart")
+        ok("THEIRS" in git("show", "origin/main:logs/history.csv", cwd=work).stdout,
+           "origin is left untouched — nothing was silently resolved")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    print(f"\n{n - len(fails)}/{n} publish checks passed" + ("" if not fails else f" — {len(fails)} FAILED"))
+    return 1 if fails else 0
+
+
 if __name__ == "__main__":
-    sys.exit(self_test() if "--self-test" in sys.argv else run())
+    if "--self-test" in sys.argv:
+        rc = self_test()
+        rc |= publish_self_test()
+        sys.exit(rc)
+    sys.exit(run())
